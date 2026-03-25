@@ -57,7 +57,7 @@ with st.form("search_form"):
 
     min_temp = st.slider("最低気温（下限）", -10, 35, 15)
     max_temp = st.slider("最高気温（上限）", 10, 45, 30)
-    city_count = st.slider("各月の表示都市数", 1, 20, 5)
+    city_count = st.slider("各月の表示都市数", 1, 30, 5)
 
     submitted = st.form_submit_button("検索")
 
@@ -105,18 +105,23 @@ if submitted:
         else:
             display_cols = [
                 c for c in [
-                    "area1",
-                    "area2",
+                    #"area1",
+                    #"area2",
                     "country",
                     "city_jp",
                     "city_en",
                     "min_temp",
                     "avg_temp",
                     "max_temp",
-                    "rain_days",
+                    #"rain_days",
+                    "precip_mm",
                 ]
                 if c in month_df.columns
             ]
-            st.dataframe(month_df[display_cols], width='content', hide_index=True)
+            #st.dataframe(month_df[display_cols], width='content', hide_index=True)
+            from st_aggrid import AgGrid
+
+            AgGrid(month_df[display_cols])
+            
 else:
     st.info("条件を入れて検索すると、月ごとのおすすめ都市を表示します。")

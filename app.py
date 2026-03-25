@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from tornado.web import url
 
 # -----------------------------
 # Google Spreadsheet設定
@@ -9,7 +10,8 @@ SHEET_ID = "1L4qsWHhucIORTjSC9MF5YtuOYk0NMQKFiI_Kzt1anWE"
 
 def load_sheet(sheet_name: str) -> pd.DataFrame:
     url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
-    return pd.read_csv(url)
+    #return pd.read_csv(url)
+    return pd.read_csv(url, low_memory=False)
 
 
 # -----------------------------
@@ -229,8 +231,11 @@ if submitted:
                 ] if c in month_df.columns
             ]
 
-            st.dataframe(
-                month_df[display_cols],
-                # use_container_width=True
-                width='content'
-            )
+            #st.dataframe(
+            #    month_df[display_cols],
+            #    # use_container_width=True
+            #    width='content'
+            #)
+            # AgGridを使用して、テーブルの幅を自動調整し、インデックスを非表示にする
+            from st_aggrid import AgGrid
+            AgGrid(month_df[display_cols])

@@ -234,13 +234,13 @@ def _build_expense_record(
         "amount_base": amount_base,
         "payment_method": payment_method,
         "description": description,
-        "usage_categories_id": usage_category_id,
-        "tax_categories_id": tax_category_id,
-        "created_at": now_str,
+        #"usage_categories_id": usage_category_id,
+        #"tax_categories_id": tax_category_id,
+        #"created_at": now_str,
         "updated_at": now_str,
         # 万一シート側が create_at なら値を入れられるよう保険で持つ
-        "create_at": now_str,
-        "update_at": now_str,
+        #"create_at": now_str,
+        #"update_at": now_str,
     }
 
 
@@ -275,8 +275,8 @@ def render_summary_preview(expenses_df: pd.DataFrame) -> None:
             "amount_base",
             "payment_method",
             "description",
-            "usage_categories_id",
-            "tax_categories_id",
+            #"usage_categories_id",
+            #"tax_categories_id",
             "updated_at",
         ]
         if col in expenses_df.columns
