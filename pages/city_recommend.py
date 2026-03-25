@@ -118,10 +118,6 @@ if submitted:
                 ]
                 if c in month_df.columns
             ]
-            #st.dataframe(month_df[display_cols], width='content', hide_index=True)
-            from st_aggrid import AgGrid
-
-            AgGrid(month_df[display_cols])
-            
+            st.dataframe(month_df[display_cols], width='content', hide_index=True)
 else:
     st.info("条件を入れて検索すると、月ごとのおすすめ都市を表示します。")

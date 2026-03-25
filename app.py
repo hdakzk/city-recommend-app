@@ -231,11 +231,8 @@ if submitted:
                 ] if c in month_df.columns
             ]
 
-            #st.dataframe(
-            #    month_df[display_cols],
-            #    # use_container_width=True
-            #    width='content'
-            #)
-            # AgGridを使用して、テーブルの幅を自動調整し、インデックスを非表示にする
-            from st_aggrid import AgGrid
-            AgGrid(month_df[display_cols])
+            st.dataframe(
+                month_df[display_cols],
+                # use_container_width=True
+                width='content'
+            )
