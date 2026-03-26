@@ -78,7 +78,7 @@ with st.form("search_form"):
         step=100,
     )
 
-    city_count = st.slider("各月の表示都市数", 1, 20, 5)
+    city_count = st.slider("各月の表示都市数", 1, 30, 5)
 
     submitted = st.form_submit_button("検索")
 

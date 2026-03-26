@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pandas as pd
 import requests
@@ -28,6 +28,7 @@ class AppData:
     tax_categories: pd.DataFrame
     city_airports: pd.DataFrame
     airports: pd.DataFrame
+    youtube_videos: pd.DataFrame
 
 
 def _normalize_text_columns(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
@@ -57,10 +58,9 @@ def load_data() -> AppData:
     expenses = load_public_sheet("Expenses")
     usage_categories = load_public_sheet("Usage_categories")
     tax_categories = load_public_sheet("Tax_categories")
-
-    # 追加
     city_airports = load_public_sheet("City_airports")
     airports = load_public_sheet("Airport")
+    youtube_videos = load_public_sheet("Youtube_videos")
 
     for df in [
         countries,
@@ -71,6 +71,7 @@ def load_data() -> AppData:
         tax_categories,
         city_airports,
         airports,
+        youtube_videos,
     ]:
         df.columns = df.columns.str.strip()
 
@@ -94,6 +95,22 @@ def load_data() -> AppData:
         airports,
         ["name", "name_ja", "city", "city_ja", "country", "country_ja", "iata_code", "icao_code", "timezone_name"]
     )
+    youtube_videos = _normalize_text_columns(
+        youtube_videos,
+        [
+            "video_id",
+            "title",
+            "url",
+            "channel_title",
+            "thumbnail_url",
+            "description",
+            "published_at",
+            "privacy_status",
+            "upload_status",
+            "license",
+            "matched_status",
+        ]
+    )
 
     for col in ["country_id", "flag"]:
         countries = _normalize_numeric_column(countries, col)
@@ -114,12 +131,21 @@ def load_data() -> AppData:
     tax_categories = _normalize_numeric_column(tax_categories, "sort_order")
     tax_categories = _normalize_numeric_column(tax_categories, "is_enabled")
 
-    # 追加
     for col in ["city_id", "airport_id"]:
         city_airports = _normalize_numeric_column(city_airports, col)
 
     for col in ["airport_id", "latitude", "longitude", "altitude_ft", "timezone_offset", "priority"]:
         airports = _normalize_numeric_column(airports, col)
+
+    for col in [
+        "city_id",
+        "view_count",
+        "like_count",
+        "duration_sec",
+        "comment_count",
+        "like_rate",
+    ]:
+        youtube_videos = _normalize_numeric_column(youtube_videos, col)
 
     return AppData(
         countries=countries,
@@ -130,6 +156,7 @@ def load_data() -> AppData:
         tax_categories=tax_categories,
         city_airports=city_airports,
         airports=airports,
+        youtube_videos=youtube_videos,
     )
 
 
