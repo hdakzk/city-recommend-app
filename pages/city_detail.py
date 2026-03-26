@@ -5,7 +5,7 @@ from urllib.parse import parse_qs, urlparse
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-from utils.sheets import load_data, get_city_detail
+from utils.sheets import load_data, get_city_detail, collect_city_youtube_videos
 
 
 # =========================
@@ -104,6 +104,17 @@ def build_youtube_videos_df(data, city_id: int) -> pd.DataFrame:
     df["city_id"] = pd.to_numeric(df["city_id"], errors="coerce")
     city_id_num = pd.to_numeric(pd.Series([city_id]), errors="coerce").iloc[0]
     df = df[df["city_id"] == city_id_num].copy()
+
+    if "default_language" in df.columns:
+        df["default_language"] = df["default_language"].astype(str).str.strip().str.lower()
+        df = df[df["default_language"] == "ja"].copy()
+
+    if df.empty:
+        return df
+
+    if "default_language" in df.columns:
+        df["default_language"] = df["default_language"].astype(str).str.strip().str.lower()
+        df = df[df["default_language"] == "ja"].copy()
 
     if df.empty:
         return df
@@ -376,16 +387,82 @@ else:
 
 # ---------------------------
 # 動画情報
-# ------------
-##以下は追加
+# ---------------------------
 st.markdown("---")
 st.markdown("### 動画情報")
 
+initial_fetch_limit = 5
+more_fetch_limit = 15
+visible_default_count = 5
+session_city_key = f"youtube_visible_count_{int(selected_city_id)}"
+status_city_key = f"youtube_fetch_status_{int(selected_city_id)}"
+
+if session_city_key not in st.session_state:
+    st.session_state[session_city_key] = visible_default_count
+
 videos_df = build_youtube_videos_df(data, int(selected_city_id))
 
+import os
+
+api_key = ""
+api_key_source = "none"
+try:
+    api_key = str(st.secrets["YOUTUBE_API_KEY"]).strip()
+    api_key_source = "st.secrets[YOUTUBE_API_KEY]"
+except Exception:
+    api_key = os.getenv("YOUTUBE_API_KEY", "").strip()
+    if api_key:
+        api_key_source = "os.environ[YOUTUBE_API_KEY]"
+
+with st.expander("YouTubeデバッグ情報", expanded=False):
+    try:
+        secret_keys = list(st.secrets.keys())
+    except Exception:
+        secret_keys = []
+    st.write({
+        "city_id": int(selected_city_id),
+        "api_key_exists": bool(api_key),
+        "api_key_prefix": api_key[:8] + "..." if api_key else None,
+        "api_key_source": api_key_source,
+        "secret_keys": secret_keys,
+        "existing_video_rows": int(len(videos_df)),
+    })
+
 if videos_df.empty:
-    st.info("この都市に紐づく動画はありません。")
+    try:
+        with st.spinner("関連動画を検索中…"):
+            result = collect_city_youtube_videos(
+                city_id=int(selected_city_id),
+                city_detail=detail,
+                data=data,
+                api_key=api_key,
+                max_total_videos=initial_fetch_limit,
+                max_queries=5,
+                language_code="ja",
+            )
+        st.session_state[status_city_key] = {
+            "added_videos": int(result.get("added_videos", 0) or 0),
+            "debug": result.get("debug", []),
+        }
+        with st.expander("YouTube自動取得デバッグ", expanded=True):
+            st.write(result.get("debug", []))
+        st.rerun()
+    except Exception as e:
+        st.error(f"動画検索時に一部取得できなかったクエリがあります: {e}")
+        with st.expander("YouTube自動取得エラー詳細", expanded=True):
+            st.exception(e)
+            st.write({"city_id": int(selected_city_id), "api_key_exists": bool(api_key), "api_key_prefix": api_key[:8] + "..." if api_key else None})
 else:
+    fetch_status = st.session_state.get(status_city_key, {})
+    debug_messages = fetch_status.get("debug", [])
+    if debug_messages:
+        with st.expander("前回取得デバッグログ", expanded=False):
+            st.write(debug_messages)
+    added_videos = int(fetch_status.get("added_videos", 0) or 0)
+    if added_videos > 0:
+        st.success(f"関連動画を {added_videos} 件取得しました。")
+        st.session_state.pop(status_city_key, None)
+
     sort_col1, sort_col2, sort_col3 = st.columns([2, 1, 1])
 
     sort_options = {
@@ -403,7 +480,7 @@ else:
         sort_order = st.radio("並び順", options=["降順", "昇順"], index=0, horizontal=True)
 
     with sort_col3:
-        st.metric("表示件数", "10件")
+        st.metric("表示件数", f"{min(len(videos_df), st.session_state[session_city_key])}件")
 
     sort_key = sort_options[sort_label]
     ascending = sort_order == "昇順"
@@ -412,38 +489,80 @@ else:
         by=sort_key,
         ascending=ascending,
         na_position="last",
-    ).head(10).reset_index(drop=True)
+    ).reset_index(drop=True)
 
-    if "current_video_id" not in st.session_state:
-        st.session_state["current_video_id"] = videos_df.iloc[0]["resolved_video_id"]
-        st.session_state["current_video_title"] = videos_df.iloc[0].get("title", "")
+    visible_count = min(len(videos_df), st.session_state[session_city_key])
+    visible_videos_df = videos_df.head(visible_count).reset_index(drop=True)
 
-    st.caption("下の一覧から動画を選ぶと、この画面内のプレーヤーで再生できます。")
+    if visible_videos_df.empty:
+        st.info("この都市に紐づく動画はありません。")
+    else:
+        current_ids = set(visible_videos_df["resolved_video_id"].astype(str).tolist())
+        if (
+            "current_video_id" not in st.session_state
+            or st.session_state["current_video_id"] not in current_ids
+        ):
+            st.session_state["current_video_id"] = visible_videos_df.iloc[0]["resolved_video_id"]
+            st.session_state["current_video_title"] = visible_videos_df.iloc[0].get("title", "")
 
-    render_main_video_player(
-        st.session_state["current_video_id"],
-        st.session_state.get("current_video_title", "")
-    )
+        st.caption("下の一覧から動画を選ぶと、この画面内のプレーヤーで再生できます。")
 
-    st.markdown("#### 動画一覧")
-    row_cols = st.columns(min(3, len(videos_df)))
+        render_main_video_player(
+            st.session_state["current_video_id"],
+            st.session_state.get("current_video_title", "")
+        )
 
-    for idx, row in videos_df.iterrows():
-        col = row_cols[idx % len(row_cols)]
-        with col:
-            thumb = row.get("thumbnail_url", "")
-            if thumb:
-                st.image(thumb, use_container_width=True)
-            st.markdown(f"**{row.get('title', 'Untitled')}**")
-            st.caption(
-                f"再生 {format_count(row.get('view_count'))} / "
-                f"👍 {format_count(row.get('like_count'))} / "
-                f"{format_published_at(row.get('published_at_dt'))}"
-            )
-            if st.button("この動画を再生", key=f"play_{idx}"):
-                st.session_state["current_video_id"] = row["resolved_video_id"]
-                st.session_state["current_video_title"] = row.get("title", "")
+        st.markdown("#### 動画一覧")
+        row_cols = st.columns(min(3, len(visible_videos_df)))
+
+        for idx, row in visible_videos_df.iterrows():
+            col = row_cols[idx % len(row_cols)]
+            with col:
+                thumb = row.get("thumbnail_url", "")
+                if thumb:
+                    st.image(thumb, use_container_width=True)
+                st.markdown(f"**{row.get('title', 'Untitled')}**")
+                st.caption(
+                    f"再生 {format_count(row.get('view_count'))} / "
+                    f"👍 {format_count(row.get('like_count'))} / "
+                    f"{format_published_at(row.get('published_at_dt'))}"
+                )
+                if st.button("この動画を再生", key=f"play_{idx}"):
+                    st.session_state["current_video_id"] = row["resolved_video_id"]
+                    st.session_state["current_video_title"] = row.get("title", "")
+                    st.rerun()
+
+    more_col1, more_col2 = st.columns([1, 3])
+    with more_col1:
+        if st.button("追加取得してもっと見る", key=f"more_fetch_{int(selected_city_id)}"):
+            try:
+                with st.spinner("関連動画を追加で検索中…"):
+                    result = collect_city_youtube_videos(
+                        city_id=int(selected_city_id),
+                        city_detail=detail,
+                        data=data,
+                        api_key=api_key,
+                        max_total_videos=more_fetch_limit,
+                        max_queries=5,
+                        language_code="ja",
+                    )
+                st.session_state[session_city_key] = more_fetch_limit
+                st.session_state[status_city_key] = {
+                    "added_videos": int(result.get("added_videos", 0) or 0),
+                    "debug": result.get("debug", []),
+                }
+                with st.expander("YouTube追加取得デバッグ", expanded=True):
+                    st.write(result.get("debug", []))
                 st.rerun()
+            except Exception as e:
+                st.error(f"追加取得に失敗しました: {e}")
+                with st.expander("YouTube追加取得エラー詳細", expanded=True):
+                    st.exception(e)
+                    st.write({"city_id": int(selected_city_id), "api_key_exists": bool(api_key), "api_key_prefix": api_key[:8] + "..." if api_key else None})
+    with more_col2:
+        if len(videos_df) > visible_count and st.button("既存の動画をもっと表示", key=f"show_more_{int(selected_city_id)}"):
+            st.session_state[session_city_key] = min(len(videos_df), more_fetch_limit)
+            st.rerun()
 
 # ---------------------------
 # ブログ情報（ハードコード）
