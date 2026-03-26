@@ -47,3 +47,5 @@ tzdata==2025.3
 urllib3==2.6.3
 watchdog==6.0.0
 streamlit-aggrid
+folium==0.20.0
+streamlit-folium
