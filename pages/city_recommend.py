@@ -4,25 +4,25 @@ from utils.sheets import load_data
 
 st.title("年間居住都市レコメンド")
 
-st.markdown("""
-<style>
-/* 全 multiselect の入力エリアを2行ぶん程度の高さにする */
-div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div {
-    min-height: 74px;
-    max-height: 74px;
-    overflow-y: auto;
-    align-items: flex-start;
-    padding-top: 6px;
-    padding-bottom: 6px;
-}
+# st.markdown("""
+# <style>
+# /* 全 multiselect の入力エリアを2行ぶん程度の高さにする */
+# div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div {
+#     min-height: 74px;
+#     max-height: 74px;
+#     overflow-y: auto;
+#     align-items: flex-start;
+#     padding-top: 6px;
+#     padding-bottom: 6px;
+# }
 
-/* 選択タグが上寄せになるようにする */
-div[data-testid="stMultiSelect"] [data-baseweb="tag"] {
-    margin-top: 2px;
-    margin-bottom: 2px;
-}
-</style>
-""", unsafe_allow_html=True)
+# /* 選択タグが上寄せになるようにする */
+# div[data-testid="stMultiSelect"] [data-baseweb="tag"] {
+#     margin-top: 2px;
+#     margin-bottom: 2px;
+# }
+# </style>
+# """, unsafe_allow_html=True)
 
 data = load_data()
 countries = data.countries.copy()
@@ -72,12 +72,33 @@ def format_text(val):
     return str(val).strip()
 
 
-def render_label_value(label, value, label_ratio=1.0, value_ratio=2.0):
-    c1, c2 = st.columns([label_ratio, value_ratio])
-    with c1:
-        st.write(label)
-    with c2:
-        st.write(value)
+def render_label_value(label, value):
+    st.markdown(
+        f"""
+        <div style="
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:12px;
+            width:100%;
+            margin:0 0 6px 0;
+            line-height:1.5;
+        ">
+            <span style="
+                white-space:nowrap;
+                font-weight:600;
+                flex-shrink:0;
+            ">{label}</span>
+            <span style="
+                text-align:right;
+                word-break:break-word;
+                overflow-wrap:anywhere;
+                flex:1;
+            ">{value}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 area1_values = clean_options(countries_flag1["area1"])
@@ -269,11 +290,11 @@ if st.session_state.get("city_search_submitted"):
                     render_label_value("最高", format_temp(max_temp_val))
 
                 with col4:
-                    render_label_value("降水量", format_precip(precip_mm_val), 1.4, 1.6)
+                    render_label_value("降水量", format_precip(precip_mm_val))
                     if pd.notna(elevation_val):
-                        render_label_value("標高", f"{int(float(elevation_val)):,} m", 1.4, 1.6)
+                        render_label_value("標高", f"{int(float(elevation_val)):,} m")
                     else:
-                        render_label_value("標高", "-", 1.4, 1.6)
+                        render_label_value("標高", "-")
 
 else:
     st.info("条件を入れて検索すると、月ごとのおすすめ都市を表示します。")
