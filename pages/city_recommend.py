@@ -4,6 +4,26 @@ from utils.sheets import load_data
 
 st.title("年間居住都市レコメンド")
 
+st.markdown("""
+<style>
+/* 全 multiselect の入力エリアを2行ぶん程度の高さにする */
+div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div {
+    min-height: 74px;
+    max-height: 74px;
+    overflow-y: auto;
+    align-items: flex-start;
+    padding-top: 6px;
+    padding-bottom: 6px;
+}
+
+/* 選択タグが上寄せになるようにする */
+div[data-testid="stMultiSelect"] [data-baseweb="tag"] {
+    margin-top: 2px;
+    margin-bottom: 2px;
+}
+</style>
+""", unsafe_allow_html=True)
+
 data = load_data()
 countries = data.countries.copy()
 cities = data.cities.copy()
@@ -11,40 +31,78 @@ climate = data.climate.copy()
 
 countries_flag1 = countries[countries["flag"] == 1].copy()
 
-area1_options = sorted(
-    [
-        x
-        for x in countries_flag1["area1"].dropna().astype(str).str.strip().unique().tolist()
-        if x and x != "nan"
-    ]
-)
-default_area1 = area1_options
+
+def clean_options(series):
+    return sorted(
+        [
+            x
+            for x in series.dropna().astype(str).str.strip().unique().tolist()
+            if x and x.lower() != "nan"
+        ]
+    )
+
+
+def format_temp(val):
+    if pd.isna(val):
+        return "-"
+    return f"{float(val):.1f}℃"
+
+
+def format_population(val):
+    if pd.isna(val) or val == "":
+        return "-"
+    try:
+        return f"{int(float(val)):,}人"
+    except Exception:
+        return f"{val}人"
+
+
+def format_precip(val):
+    if pd.isna(val) or val == "":
+        return "-"
+    try:
+        return f"{float(val):.1f} mm"
+    except Exception:
+        return str(val)
+
+
+def format_text(val):
+    if pd.isna(val) or str(val).strip() == "":
+        return "-"
+    return str(val).strip()
+
+
+def render_label_value(label, value, label_ratio=1.0, value_ratio=2.0):
+    c1, c2 = st.columns([label_ratio, value_ratio])
+    with c1:
+        st.write(label)
+    with c2:
+        st.write(value)
+
+
+area1_values = clean_options(countries_flag1["area1"])
 
 with st.form("search_form"):
     st.subheader("検索条件")
 
     selected_area1 = st.multiselect(
-        "対象エリア1（Countries.area1）",
-        options=area1_options,
-        default=default_area1,
+        "対象エリア1",
+        options=area1_values,
+        default=area1_values,
+        placeholder="対象エリア1を選択",
     )
 
     area2_base = countries_flag1.copy()
     if selected_area1:
         area2_base = area2_base[area2_base["area1"].isin(selected_area1)]
 
-    area2_options = sorted(
-        [
-            x
-            for x in area2_base["area2"].dropna().astype(str).str.strip().unique().tolist()
-            if x and x != "nan"
-        ]
-    )
+    area2_values = clean_options(area2_base["area2"])
 
     selected_area2 = st.multiselect(
-        "対象エリア2（Countries.area2）",
-        options=area2_options,
-        default=area2_options,
+        "対象エリア2",
+        options=area2_values,
+        default=area2_values,
+        placeholder="対象エリア2を選択",
     )
 
     country_base = countries_flag1.copy()
@@ -53,32 +111,32 @@ with st.form("search_form"):
     if selected_area2:
         country_base = country_base[country_base["area2"].isin(selected_area2)]
 
-    country_options = sorted(
-        [
-            x
-            for x in country_base["country"].dropna().astype(str).str.strip().unique().tolist()
-            if x and x != "nan"
-        ]
+    country_values = clean_options(country_base["country"])
+
+    selected_country = st.multiselect(
+        "対象国",
+        options=country_values,
+        default=country_values,
+        placeholder="対象国を選択",
     )
 
-    selected_countries = st.multiselect(
-        "対象国（Countries.country / flag=1のみ）",
-        options=country_options,
-        default=country_options,
+    temp_range = st.slider(
+        "気温",
+        min_value=-10,
+        max_value=45,
+        value=(15, 30),
+        step=1,
     )
-
-    min_temp = st.slider("最低気温（下限）", -10, 35, 15)
-    max_temp = st.slider("最高気温（上限）", 10, 45, 30)
 
     elevation_range = st.slider(
         "標高（m）",
         min_value=-100,
-        max_value=5000,
-        value=(-100, 5000),
+        max_value=2000,
+        value=(-100, 2000),
         step=100,
     )
 
-    city_count = st.slider("各月の表示都市数", 1, 30, 5)
+    city_count = st.slider("表示都市数", 1, 30, 5)
 
     submitted = st.form_submit_button("検索")
 
@@ -87,9 +145,9 @@ with st.form("search_form"):
         st.session_state["city_search_conditions"] = {
             "selected_area1": selected_area1,
             "selected_area2": selected_area2,
-            "selected_countries": selected_countries,
-            "min_temp": min_temp,
-            "max_temp": max_temp,
+            "selected_country": selected_country,
+            "temp_min": temp_range[0],
+            "temp_max": temp_range[1],
             "elevation_min": elevation_range[0],
             "elevation_max": elevation_range[1],
             "city_count": city_count,
@@ -98,13 +156,13 @@ with st.form("search_form"):
 if st.session_state.get("city_search_submitted"):
     cond = st.session_state.get("city_search_conditions", {})
 
-    selected_area1 = cond.get("selected_area1", [])
+    selected_area1 = cond.get("selected_area1", area1_values)
     selected_area2 = cond.get("selected_area2", [])
-    selected_countries = cond.get("selected_countries", [])
-    min_temp = cond.get("min_temp", 15)
-    max_temp = cond.get("max_temp", 30)
+    selected_country = cond.get("selected_country", [])
+    temp_min = cond.get("temp_min", 15)
+    temp_max = cond.get("temp_max", 30)
     elevation_min = cond.get("elevation_min", -100)
-    elevation_max = cond.get("elevation_max", 5000)
+    elevation_max = cond.get("elevation_max", 2000)
     city_count = cond.get("city_count", 5)
 
     filtered_countries = countries_flag1.copy()
@@ -113,8 +171,8 @@ if st.session_state.get("city_search_submitted"):
         filtered_countries = filtered_countries[filtered_countries["area1"].isin(selected_area1)]
     if selected_area2:
         filtered_countries = filtered_countries[filtered_countries["area2"].isin(selected_area2)]
-    if selected_countries:
-        filtered_countries = filtered_countries[filtered_countries["country"].isin(selected_countries)]
+    if selected_country:
+        filtered_countries = filtered_countries[filtered_countries["country"].isin(selected_country)]
 
     if filtered_countries.empty:
         st.warning("条件に合う国がありません。")
@@ -129,10 +187,16 @@ if st.session_state.get("city_search_submitted"):
 
     if "elevation" in filtered_cities.columns:
         filtered_cities["elevation"] = pd.to_numeric(filtered_cities["elevation"], errors="coerce")
-        filtered_cities = filtered_cities[
-            (filtered_cities["elevation"] >= elevation_min)
-            & (filtered_cities["elevation"] <= elevation_max)
-        ]
+
+        if elevation_max >= 2000:
+            filtered_cities = filtered_cities[
+                filtered_cities["elevation"] >= elevation_min
+            ]
+        else:
+            filtered_cities = filtered_cities[
+                (filtered_cities["elevation"] >= elevation_min)
+                & (filtered_cities["elevation"] <= elevation_max)
+            ]
 
     if filtered_cities.empty:
         st.warning("条件に合う都市がありません。")
@@ -142,22 +206,21 @@ if st.session_state.get("city_search_submitted"):
         filtered_countries, on="country_id", how="left"
     )
 
-    st.caption(f"area1: {', '.join(selected_area1) if selected_area1 else '全て'}")
-    st.caption(f"area2: {', '.join(selected_area2) if selected_area2 else '全て'}")
-    st.caption(f"country: {', '.join(selected_countries) if selected_countries else '全て'}")
-    st.caption(f"elevation: {elevation_min}m ～ {elevation_max}m")
+    for col in ["min_temp", "avg_temp", "max_temp", "precip_mm"]:
+        if col in merged.columns:
+            merged[col] = pd.to_numeric(merged[col], errors="coerce")
 
     for month in range(1, 13):
         st.subheader(f"{month}月")
 
         month_df = merged[
             (merged["month"] == month)
-            & (merged["min_temp"] >= min_temp)
-            & (merged["max_temp"] <= max_temp)
+            & (merged["min_temp"] >= temp_min)
+            & (merged["max_temp"] <= temp_max)
         ].copy()
 
         if "avg_temp" in month_df.columns:
-            ideal_avg_temp = (min_temp + max_temp) / 2
+            ideal_avg_temp = (temp_min + temp_max) / 2
             month_df["match_score"] = (month_df["avg_temp"] - ideal_avg_temp).abs()
             month_df = month_df.sort_values("match_score", ascending=True)
 
@@ -169,52 +232,48 @@ if st.session_state.get("city_search_submitted"):
 
         for _, row in month_df.iterrows():
             with st.container(border=True):
-                col1, col2, col3, col4, col5, col6 = st.columns([2.4, 1.6, 1.2, 1.2, 1.2, 1.0])
+                col1, col2, col3, col4 = st.columns([2.5, 2.4, 1.8, 1.8])
 
                 city_jp = row.get("city_jp", "")
                 city_en = row.get("city_en", "")
                 country = row.get("country", "")
                 area_text = f"{row.get('area1', '')} > {row.get('area2', '')}"
+
+                population_val = row.get("population", "")
+                currency_val = row.get("currency_code", "")
+                timezone_val = row.get("timezone", "")
+
                 min_temp_val = row.get("min_temp", "")
                 avg_temp_val = row.get("avg_temp", "")
                 max_temp_val = row.get("max_temp", "")
-                rain_days = row.get("rain_days", "")
+                precip_mm_val = row.get("precip_mm", "")
                 elevation_val = row.get("elevation", "")
 
                 with col1:
                     if st.button(
                         f"{city_jp} / {city_en}",
-                        key=f"detail_{month}_{int(row['city_id'])}"
+                        key=f"detail_{month}_{int(row['city_id'])}",
                     ):
                         st.session_state["selected_city_id"] = int(row["city_id"])
                         st.switch_page("pages/city_detail.py")
                     st.caption(f"{country}｜{area_text}")
 
                 with col2:
-                    st.write(f"最低 {min_temp_val}℃")
-                    st.write(f"平均 {avg_temp_val}℃")
-                    st.write(f"最高 {max_temp_val}℃")
+                    render_label_value("人口", format_population(population_val))
+                    render_label_value("通貨", format_text(currency_val))
+                    render_label_value("タイムゾーン", format_text(timezone_val))
 
                 with col3:
-                    st.write("雨日数")
-                    st.write(rain_days)
+                    render_label_value("最低", format_temp(min_temp_val))
+                    render_label_value("平均", format_temp(avg_temp_val))
+                    render_label_value("最高", format_temp(max_temp_val))
 
                 with col4:
-                    st.write("標高")
+                    render_label_value("降水量", format_precip(precip_mm_val), 1.4, 1.6)
                     if pd.notna(elevation_val):
-                        st.write(f"{int(elevation_val)} m")
+                        render_label_value("標高", f"{int(float(elevation_val)):,} m", 1.4, 1.6)
                     else:
-                        st.write("-")
-
-                with col5:
-                    match_score = row.get("match_score", "")
-                    if match_score != "":
-                        st.write("マッチ度差")
-                        st.write(round(float(match_score), 2))
-
-                with col6:
-                    st.write("city_id")
-                    st.write(int(row["city_id"]))
+                        render_label_value("標高", "-", 1.4, 1.6)
 
 else:
     st.info("条件を入れて検索すると、月ごとのおすすめ都市を表示します。")
