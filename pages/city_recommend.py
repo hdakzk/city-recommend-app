@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from utils.sheets import load_data
 
+st.set_page_config(layout="wide")
 st.title("年間居住都市レコメンド")
 
 data = load_data()
@@ -81,17 +82,101 @@ def render_label_value(label, value):
     )
 
 
+def get_area2_values(selected_area1):
+    df = countries_flag1.copy()
+    if selected_area1:
+        df = df[df["area1"].isin(selected_area1)]
+    return clean_options(df["area2"])
+
+
+def get_country_values(selected_area1, selected_area2):
+    df = countries_flag1.copy()
+    if selected_area1:
+        df = df[df["area1"].isin(selected_area1)]
+    if selected_area2:
+        df = df[df["area2"].isin(selected_area2)]
+    return clean_options(df["country"])
+
+
+def on_area1_change():
+    selected_area1 = st.session_state.get("selected_area1_live", [])
+
+    # area1変更時は、紐づくarea2を全部選択
+    new_area2_values = get_area2_values(selected_area1)
+    st.session_state["selected_area2_live"] = new_area2_values
+
+    # その area1 + area2 に紐づく country を全部選択
+    new_country_values = get_country_values(
+        st.session_state["selected_area1_live"],
+        st.session_state["selected_area2_live"],
+    )
+    st.session_state["selected_country_live"] = new_country_values
+
+
+def on_area2_change():
+    selected_area1 = st.session_state.get("selected_area1_live", [])
+    selected_area2 = st.session_state.get("selected_area2_live", [])
+
+    # area2変更時は、紐づくcountryを全部選択
+    new_country_values = get_country_values(selected_area1, selected_area2)
+    st.session_state["selected_country_live"] = new_country_values
+
+
+# ----------------------------
+# 初期候補
+# ----------------------------
 area1_values = clean_options(countries_flag1["area1"])
 
-# 初期化
+
+# ----------------------------
+# Session State 初期化
+# ----------------------------
 if "selected_area1_live" not in st.session_state:
-    st.session_state["selected_area1_live"] = area1_values
+    st.session_state["selected_area1_live"] = area1_values.copy()
 
 if "selected_area2_live" not in st.session_state:
-    st.session_state["selected_area2_live"] = []
+    st.session_state["selected_area2_live"] = get_area2_values(
+        st.session_state["selected_area1_live"]
+    )
 
 if "selected_country_live" not in st.session_state:
-    st.session_state["selected_country_live"] = []
+    st.session_state["selected_country_live"] = get_country_values(
+        st.session_state["selected_area1_live"],
+        st.session_state["selected_area2_live"],
+    )
+
+if "temp_range_live" not in st.session_state:
+    st.session_state["temp_range_live"] = (15, 30)
+
+if "elevation_range_live" not in st.session_state:
+    st.session_state["elevation_range_live"] = (-100, 2000)
+
+if "city_count_live" not in st.session_state:
+    st.session_state["city_count_live"] = 5
+
+
+# ----------------------------
+# 画面描画前に候補整合性を保つ
+# ----------------------------
+area2_values = get_area2_values(st.session_state["selected_area1_live"])
+valid_area2 = [
+    x for x in st.session_state["selected_area2_live"] if x in area2_values
+]
+if not valid_area2:
+    valid_area2 = area2_values
+st.session_state["selected_area2_live"] = valid_area2
+
+country_values = get_country_values(
+    st.session_state["selected_area1_live"],
+    st.session_state["selected_area2_live"],
+)
+valid_country = [
+    x for x in st.session_state["selected_country_live"] if x in country_values
+]
+if not valid_country:
+    valid_country = country_values
+st.session_state["selected_country_live"] = valid_country
+
 
 st.subheader("検索条件")
 
@@ -101,46 +186,29 @@ st.subheader("検索条件")
 selected_area1 = st.multiselect(
     "対象エリア1",
     options=area1_values,
-    default=st.session_state["selected_area1_live"],
     placeholder="対象エリア1を選択",
     key="selected_area1_live",
+    on_change=on_area1_change,
 )
 
-area2_base = countries_flag1.copy()
-if selected_area1:
-    area2_base = area2_base[area2_base["area1"].isin(selected_area1)]
-
-area2_values = clean_options(area2_base["area2"])
-
-# 候補外になった値は落とす
-valid_area2 = [x for x in st.session_state["selected_area2_live"] if x in area2_values]
-if valid_area2 != st.session_state["selected_area2_live"]:
-    st.session_state["selected_area2_live"] = valid_area2
+area2_values = get_area2_values(st.session_state["selected_area1_live"])
 
 selected_area2 = st.multiselect(
     "対象エリア2",
     options=area2_values,
-    default=st.session_state["selected_area2_live"],
     placeholder="対象エリア2を選択",
     key="selected_area2_live",
+    on_change=on_area2_change,
 )
 
-country_base = countries_flag1.copy()
-if selected_area1:
-    country_base = country_base[country_base["area1"].isin(selected_area1)]
-if selected_area2:
-    country_base = country_base[country_base["area2"].isin(selected_area2)]
-
-country_values = clean_options(country_base["country"])
-
-valid_country = [x for x in st.session_state["selected_country_live"] if x in country_values]
-if valid_country != st.session_state["selected_country_live"]:
-    st.session_state["selected_country_live"] = valid_country
+country_values = get_country_values(
+    st.session_state["selected_area1_live"],
+    st.session_state["selected_area2_live"],
+)
 
 selected_country = st.multiselect(
     "対象国",
     options=country_values,
-    default=st.session_state["selected_country_live"],
     placeholder="対象国を選択",
     key="selected_country_live",
 )
@@ -153,7 +221,7 @@ with st.form("search_form"):
         "気温",
         min_value=-10,
         max_value=45,
-        value=st.session_state.get("temp_range_live", (15, 30)),
+        value=st.session_state["temp_range_live"],
         step=1,
     )
 
@@ -161,15 +229,15 @@ with st.form("search_form"):
         "標高（m）",
         min_value=-100,
         max_value=2000,
-        value=st.session_state.get("elevation_range_live", (-100, 2000)),
+        value=st.session_state["elevation_range_live"],
         step=100,
     )
 
     city_count = st.slider(
         "表示都市数",
-        1,
-        30,
-        st.session_state.get("city_count_live", 5),
+        min_value=1,
+        max_value=30,
+        value=st.session_state["city_count_live"],
     )
 
     submitted = st.form_submit_button("検索")
@@ -181,9 +249,9 @@ with st.form("search_form"):
 
         st.session_state["city_search_submitted"] = True
         st.session_state["city_search_conditions"] = {
-            "selected_area1": selected_area1,
-            "selected_area2": selected_area2,
-            "selected_country": selected_country,
+            "selected_area1": st.session_state["selected_area1_live"].copy(),
+            "selected_area2": st.session_state["selected_area2_live"].copy(),
+            "selected_country": st.session_state["selected_country_live"].copy(),
             "temp_min": temp_range[0],
             "temp_max": temp_range[1],
             "elevation_min": elevation_range[0],
@@ -206,11 +274,17 @@ if st.session_state.get("city_search_submitted"):
     filtered_countries = countries_flag1.copy()
 
     if selected_area1:
-        filtered_countries = filtered_countries[filtered_countries["area1"].isin(selected_area1)]
+        filtered_countries = filtered_countries[
+            filtered_countries["area1"].isin(selected_area1)
+        ]
     if selected_area2:
-        filtered_countries = filtered_countries[filtered_countries["area2"].isin(selected_area2)]
+        filtered_countries = filtered_countries[
+            filtered_countries["area2"].isin(selected_area2)
+        ]
     if selected_country:
-        filtered_countries = filtered_countries[filtered_countries["country"].isin(selected_country)]
+        filtered_countries = filtered_countries[
+            filtered_countries["country"].isin(selected_country)
+        ]
 
     if filtered_countries.empty:
         st.warning("条件に合う国がありません。")
@@ -224,7 +298,9 @@ if st.session_state.get("city_search_submitted"):
         st.stop()
 
     if "elevation" in filtered_cities.columns:
-        filtered_cities["elevation"] = pd.to_numeric(filtered_cities["elevation"], errors="coerce")
+        filtered_cities["elevation"] = pd.to_numeric(
+            filtered_cities["elevation"], errors="coerce"
+        )
 
         if elevation_max >= 2000:
             filtered_cities = filtered_cities[
