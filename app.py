@@ -2,6 +2,31 @@ import streamlit as st
 import pandas as pd
 from tornado.web import url
 
+st.set_page_config(
+    page_title="都市レコメンド",
+    layout="wide",
+)
+
+# 画面全体を広く使うための共通CSS
+st.markdown(
+    """
+    <style>
+    .block-container {
+        max-width: 100% !important;
+        padding-top: 1.2rem;
+        padding-left: 2rem;
+        padding-right: 2rem;
+        padding-bottom: 2rem;
+    }
+
+    section[data-testid="stSidebar"] + div .block-container {
+        max-width: 100% !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # -----------------------------
 # Google Spreadsheet設定
 # -----------------------------
@@ -10,7 +35,6 @@ SHEET_ID = "1L4qsWHhucIORTjSC9MF5YtuOYk0NMQKFiI_Kzt1anWE"
 
 def load_sheet(sheet_name: str) -> pd.DataFrame:
     url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
-    #return pd.read_csv(url)
     return pd.read_csv(url, low_memory=False)
 
 
@@ -70,7 +94,6 @@ area1_options = sorted(
     [x for x in countries_flag1["area1"].dropna().astype(str).str.strip().unique().tolist() if x and x != "nan"]
 )
 
-# 初期値用
 default_area1 = area1_options
 
 # -----------------------------
@@ -81,14 +104,12 @@ st.title("🌏 年間居住都市レコメンド")
 with st.form("search_form"):
     st.subheader("検索条件")
 
-    # area1
     selected_area1 = st.multiselect(
         "対象エリア1（Countries.area1）",
         options=area1_options,
         default=default_area1
     )
 
-    # area1 に応じた area2 候補
     area2_base = countries_flag1.copy()
     if selected_area1:
         area2_base = area2_base[area2_base["area1"].isin(selected_area1)]
@@ -103,7 +124,6 @@ with st.form("search_form"):
         default=area2_options
     )
 
-    # area1 + area2 に応じた国候補（flag=1のみ）
     country_base = countries_flag1.copy()
 
     if selected_area1:
@@ -122,26 +142,9 @@ with st.form("search_form"):
         default=country_options
     )
 
-    min_temp = st.slider(
-        "最低気温（下限）",
-        -10,
-        35,
-        15
-    )
-
-    max_temp = st.slider(
-        "最高気温（上限）",
-        10,
-        45,
-        30
-    )
-
-    city_count = st.slider(
-        "各月の表示都市数",
-        1,
-        20,
-        5
-    )
+    min_temp = st.slider("最低気温（下限）", -10, 35, 15)
+    max_temp = st.slider("最高気温（上限）", 10, 45, 30)
+    city_count = st.slider("各月の表示都市数", 1, 20, 5)
 
     submitted = st.form_submit_button("検索")
 
@@ -233,6 +236,6 @@ if submitted:
 
             st.dataframe(
                 month_df[display_cols],
-                # use_container_width=True
-                width='content'
+                width="stretch",
+                hide_index=True,
             )

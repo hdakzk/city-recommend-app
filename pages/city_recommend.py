@@ -4,26 +4,6 @@ from utils.sheets import load_data
 
 st.title("年間居住都市レコメンド")
 
-# st.markdown("""
-# <style>
-# /* 全 multiselect の入力エリアを2行ぶん程度の高さにする */
-# div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div {
-#     min-height: 74px;
-#     max-height: 74px;
-#     overflow-y: auto;
-#     align-items: flex-start;
-#     padding-top: 6px;
-#     padding-bottom: 6px;
-# }
-
-# /* 選択タグが上寄せになるようにする */
-# div[data-testid="stMultiSelect"] [data-baseweb="tag"] {
-#     margin-top: 2px;
-#     margin-bottom: 2px;
-# }
-# </style>
-# """, unsafe_allow_html=True)
-
 data = load_data()
 countries = data.countries.copy()
 cities = data.cities.copy()
@@ -103,49 +83,77 @@ def render_label_value(label, value):
 
 area1_values = clean_options(countries_flag1["area1"])
 
+# 初期化
+if "selected_area1_live" not in st.session_state:
+    st.session_state["selected_area1_live"] = area1_values
+
+if "selected_area2_live" not in st.session_state:
+    st.session_state["selected_area2_live"] = []
+
+if "selected_country_live" not in st.session_state:
+    st.session_state["selected_country_live"] = []
+
+st.subheader("検索条件")
+
+# ----------------------------
+# form の外で連鎖させる項目
+# ----------------------------
+selected_area1 = st.multiselect(
+    "対象エリア1",
+    options=area1_values,
+    default=st.session_state["selected_area1_live"],
+    placeholder="対象エリア1を選択",
+    key="selected_area1_live",
+)
+
+area2_base = countries_flag1.copy()
+if selected_area1:
+    area2_base = area2_base[area2_base["area1"].isin(selected_area1)]
+
+area2_values = clean_options(area2_base["area2"])
+
+# 候補外になった値は落とす
+valid_area2 = [x for x in st.session_state["selected_area2_live"] if x in area2_values]
+if valid_area2 != st.session_state["selected_area2_live"]:
+    st.session_state["selected_area2_live"] = valid_area2
+
+selected_area2 = st.multiselect(
+    "対象エリア2",
+    options=area2_values,
+    default=st.session_state["selected_area2_live"],
+    placeholder="対象エリア2を選択",
+    key="selected_area2_live",
+)
+
+country_base = countries_flag1.copy()
+if selected_area1:
+    country_base = country_base[country_base["area1"].isin(selected_area1)]
+if selected_area2:
+    country_base = country_base[country_base["area2"].isin(selected_area2)]
+
+country_values = clean_options(country_base["country"])
+
+valid_country = [x for x in st.session_state["selected_country_live"] if x in country_values]
+if valid_country != st.session_state["selected_country_live"]:
+    st.session_state["selected_country_live"] = valid_country
+
+selected_country = st.multiselect(
+    "対象国",
+    options=country_values,
+    default=st.session_state["selected_country_live"],
+    placeholder="対象国を選択",
+    key="selected_country_live",
+)
+
+# ----------------------------
+# form に残す項目
+# ----------------------------
 with st.form("search_form"):
-    st.subheader("検索条件")
-
-    selected_area1 = st.multiselect(
-        "対象エリア1",
-        options=area1_values,
-        default=area1_values,
-        placeholder="対象エリア1を選択",
-    )
-
-    area2_base = countries_flag1.copy()
-    if selected_area1:
-        area2_base = area2_base[area2_base["area1"].isin(selected_area1)]
-
-    area2_values = clean_options(area2_base["area2"])
-
-    selected_area2 = st.multiselect(
-        "対象エリア2",
-        options=area2_values,
-        default=area2_values,
-        placeholder="対象エリア2を選択",
-    )
-
-    country_base = countries_flag1.copy()
-    if selected_area1:
-        country_base = country_base[country_base["area1"].isin(selected_area1)]
-    if selected_area2:
-        country_base = country_base[country_base["area2"].isin(selected_area2)]
-
-    country_values = clean_options(country_base["country"])
-
-    selected_country = st.multiselect(
-        "対象国",
-        options=country_values,
-        default=country_values,
-        placeholder="対象国を選択",
-    )
-
     temp_range = st.slider(
         "気温",
         min_value=-10,
         max_value=45,
-        value=(15, 30),
+        value=st.session_state.get("temp_range_live", (15, 30)),
         step=1,
     )
 
@@ -153,15 +161,24 @@ with st.form("search_form"):
         "標高（m）",
         min_value=-100,
         max_value=2000,
-        value=(-100, 2000),
+        value=st.session_state.get("elevation_range_live", (-100, 2000)),
         step=100,
     )
 
-    city_count = st.slider("表示都市数", 1, 30, 5)
+    city_count = st.slider(
+        "表示都市数",
+        1,
+        30,
+        st.session_state.get("city_count_live", 5),
+    )
 
     submitted = st.form_submit_button("検索")
 
     if submitted:
+        st.session_state["temp_range_live"] = temp_range
+        st.session_state["elevation_range_live"] = elevation_range
+        st.session_state["city_count_live"] = city_count
+
         st.session_state["city_search_submitted"] = True
         st.session_state["city_search_conditions"] = {
             "selected_area1": selected_area1,
@@ -282,7 +299,7 @@ if st.session_state.get("city_search_submitted"):
                 with col2:
                     render_label_value("人口", format_population(population_val))
                     render_label_value("通貨", format_text(currency_val))
-                    render_label_value("タイムゾーン", format_text(timezone_val))
+                    render_label_value("TZ", format_text(timezone_val))
 
                 with col3:
                     render_label_value("最低", format_temp(min_temp_val))
