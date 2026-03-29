@@ -12,6 +12,7 @@ from google.oauth2.service_account import Credentials
 PAGE_TITLE = "経費登録"
 BASE_CURRENCY = "JPY"
 VND_FIXED_RATE_TO_JPY = 0.006
+FIXED_PAYMENT_CURRENCY = "VND"
 PAYMENT_METHODS = ["現金", "クレジットカード", "電子決済", "WISE"]
 FRANKFURTER_URL = "https://api.frankfurter.dev/v2/rates"
 
@@ -102,7 +103,6 @@ def clean_flag_value(value: Any) -> int:
         return 0
 
 
-
 def build_currency_options(countries_df: pd.DataFrame) -> List[str]:
     if countries_df.empty or "currency_code" not in countries_df.columns:
         return [BASE_CURRENCY]
@@ -126,7 +126,6 @@ def build_currency_options(countries_df: pd.DataFrame) -> List[str]:
         currencies.append(BASE_CURRENCY)
 
     return sorted(currencies)
-
 
 
 def build_category_options(df: pd.DataFrame) -> Dict[str, Any]:
@@ -186,7 +185,6 @@ def get_exchange_rate(payment_date: date, currency_code: str, base_currency: str
     return rate
 
 
-
 def calculate_amount_base(amount: float, exchange_rate: float) -> int:
     return int(round(amount * exchange_rate))
 
@@ -206,7 +204,6 @@ def _parse_existing_ids(expenses_df: pd.DataFrame) -> List[int]:
         except Exception:
             continue
     return ids
-
 
 
 def _build_expense_record(
@@ -244,7 +241,6 @@ def _build_expense_record(
     }
 
 
-
 def append_expense_record(record: Dict[str, Any]) -> None:
     ws = get_workbook().worksheet("Expenses")
     headers = get_sheet_headers("Expenses")
@@ -275,14 +271,11 @@ def render_summary_preview(expenses_df: pd.DataFrame) -> None:
             "amount_base",
             "payment_method",
             "description",
-            #"usage_categories_id",
-            #"tax_categories_id",
             "updated_at",
         ]
         if col in expenses_df.columns
     ]
-    st.dataframe(expenses_df[preview_cols].tail(10), width='content')
-
+    st.dataframe(expenses_df[preview_cols].tail(10), width="content")
 
 
 def main() -> None:
@@ -295,7 +288,6 @@ def main() -> None:
         st.error(f"初期データの読み込みに失敗しました: {e}")
         st.stop()
 
-    currency_options = build_currency_options(countries_df)
     usage_options = build_category_options(usage_df)
     tax_options = build_category_options(tax_df)
 
@@ -307,19 +299,35 @@ def main() -> None:
         st.stop()
 
     with st.form("expense_register_form"):
-        col1, col2 = st.columns(2)
-        with col1:
+        # 1段目
+        row1_col1, row1_col2 = st.columns(2)
+        with row1_col1:
             payment_date_value = st.date_input("決済日", value=date.today(), format="YYYY/MM/DD")
-            currency_code = st.selectbox("通貨", currency_options, index=0)
+        with row1_col2:
+            st.text_input("決済通貨", value=FIXED_PAYMENT_CURRENCY, disabled=True)
+
+        # 2段目
+        row2_col1, row2_col2 = st.columns(2)
+        with row2_col1:
             amount = st.number_input("金額", min_value=0.0, step=1.0, format="%.0f")
+        with row2_col2:
             payment_method = st.selectbox("決済方法", PAYMENT_METHODS, index=0)
 
-        with col2:
+        # 3段目
+        row3_col1, row3_col2 = st.columns(2)
+        with row3_col1:
             usage_label = st.selectbox("用途別カテゴリ", list(usage_options.keys()), index=0)
+        with row3_col2:
             tax_label = st.selectbox("税務別カテゴリ", list(tax_options.keys()), index=0)
-            description = st.text_area("内容", placeholder="例: ランチ、ホテル代、Grab など")
 
-        submitted = st.form_submit_button("登録", width='content')
+        # 4段目
+        description = st.text_area(
+            "内容",
+            placeholder="例: ランチ、ホテル代、Grab など",
+            height=110,
+        )
+
+        submitted = st.form_submit_button("登録", width="content")
 
     if submitted:
         if amount <= 0:
@@ -327,6 +335,7 @@ def main() -> None:
             st.stop()
 
         try:
+            currency_code = FIXED_PAYMENT_CURRENCY
             exchange_rate = get_exchange_rate(payment_date_value, currency_code, BASE_CURRENCY)
             amount_base = calculate_amount_base(amount, exchange_rate)
 
