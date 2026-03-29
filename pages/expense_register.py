@@ -255,6 +255,42 @@ def append_expense_record(record: Dict[str, Any]) -> None:
 # UI
 # =========================
 
+def apply_form_css() -> None:
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stDateInput"] input,
+        div[data-testid="stTextInput"] input,
+        div[data-testid="stNumberInput"] input {
+            height: 52px !important;
+            font-size: 16px !important;
+        }
+
+        div[data-baseweb="select"] > div {
+            min-height: 52px !important;
+            font-size: 16px !important;
+        }
+
+        textarea {
+            font-size: 16px !important;
+        }
+
+        button[kind="primary"] {
+            min-height: 52px !important;
+            font-size: 16px !important;
+        }
+
+        /* dataframe のヘッダー中央揃え */
+        div[data-testid="stDataFrame"] div[role="columnheader"] {
+            justify-content: center !important;
+            text-align: center !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_summary_preview(expenses_df: pd.DataFrame) -> None:
     st.subheader("直近の登録データ")
     if expenses_df.empty:
@@ -275,10 +311,52 @@ def render_summary_preview(expenses_df: pd.DataFrame) -> None:
         ]
         if col in expenses_df.columns
     ]
-    st.dataframe(expenses_df[preview_cols].tail(10), width="content")
+
+    preview_df = expenses_df[preview_cols].copy()
+
+    if "payment_date" in preview_df.columns:
+        preview_df["payment_date_sort"] = pd.to_datetime(
+            preview_df["payment_date"],
+            format="%Y/%m/%d",
+            errors="coerce",
+        )
+        preview_df = (
+            preview_df.sort_values("payment_date_sort", ascending=False, na_position="last")
+            .drop(columns=["payment_date_sort"])
+            .head(10)
+        )
+    else:
+        preview_df = preview_df.tail(10)
+
+    rename_map = {
+        "id": "ID",
+        "payment_date": "決済日",
+        "currency_code": "決済通貨",
+        "amount": "金額",
+        "exchange_rate": "換算レート",
+        "amount_base": "円換算額",
+        "payment_method": "決済方法",
+        "description": "内容",
+        "updated_at": "更新日時",
+    }
+    preview_df = preview_df.rename(columns=rename_map)
+
+    if "金額" in preview_df.columns:
+        preview_df["金額"] = pd.to_numeric(preview_df["金額"], errors="coerce").map(
+            lambda x: f"{x:,.0f}" if pd.notna(x) else ""
+        )
+
+    if "円換算額" in preview_df.columns:
+        preview_df["円換算額"] = pd.to_numeric(preview_df["円換算額"], errors="coerce").map(
+            lambda x: f"{x:,.0f}" if pd.notna(x) else ""
+        )
+
+    st.dataframe(preview_df, width="content")
 
 
 def main() -> None:
+    apply_form_css()
+
     st.title(PAGE_TITLE)
     st.caption("旅行・滞在中の支出を登録します。VND は固定レート 0.006 JPY で換算します。")
 
