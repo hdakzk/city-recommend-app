@@ -1,13 +1,19 @@
 import math
-from datetime import datetime, date
-from typing import Any, Dict, List, Tuple
+from datetime import date
+from typing import Any, Dict
 
-import gspread
 import pandas as pd
 import requests
 import streamlit as st
-from google.oauth2.service_account import Credentials
 
+from utils.auth import require_authenticated_user
+from utils.expense_db import (
+    build_category_options,
+    build_expense_record,
+    insert_expense_record,
+    load_expense_master_data,
+    upload_expense_receipt,
+)
 
 PAGE_TITLE = "経費登録"
 BASE_CURRENCY = "JPY"
@@ -15,149 +21,20 @@ VND_FIXED_RATE_TO_JPY = 0.006
 FIXED_PAYMENT_CURRENCY = "VND"
 PAYMENT_METHODS = ["現金", "クレジットカード", "電子決済", "WISE"]
 FRANKFURTER_URL = "https://api.frankfurter.dev/v2/rates"
-
-
-# =========================
-# Google Sheets helpers
-# =========================
-
-def _get_spreadsheet_id() -> str:
-    """st.secrets から spreadsheet_id を柔軟に取得する。"""
-    candidate_paths = [
-        ("sheets", "spreadsheet_id"),
-        ("google_sheets", "spreadsheet_id"),
-        ("google_sheet", "sheet_id"),
-        ("google_sheet", "spreadsheet_id"),
-    ]
-    for section, key in candidate_paths:
-        if section in st.secrets and key in st.secrets[section]:
-            return st.secrets[section][key]
-    raise KeyError(
-        "spreadsheet_id が secrets.toml に見つかりません。"
-        "[sheets] spreadsheet_id = \"...\" の形式で設定してください。"
-    )
-
-
-@st.cache_resource(show_spinner=False)
-def get_gspread_client() -> gspread.Client:
-    if "gcp_service_account" not in st.secrets:
-        raise KeyError(
-            "gcp_service_account が secrets.toml に見つかりません。"
-            "サービスアカウント情報を設定してください。"
-        )
-
-    credentials_info = dict(st.secrets["gcp_service_account"])
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    credentials = Credentials.from_service_account_info(credentials_info, scopes=scopes)
-    return gspread.authorize(credentials)
-
-
-@st.cache_resource(show_spinner=False)
-def get_workbook() -> gspread.Spreadsheet:
-    client = get_gspread_client()
-    spreadsheet_id = _get_spreadsheet_id()
-    return client.open_by_key(spreadsheet_id)
-
-
-@st.cache_data(ttl=120, show_spinner=False)
-def read_sheet(sheet_name: str) -> pd.DataFrame:
-    ws = get_workbook().worksheet(sheet_name)
-    records = ws.get_all_records()
-    return pd.DataFrame(records)
-
-
-@st.cache_data(ttl=120, show_spinner=False)
-def get_sheet_headers(sheet_name: str) -> List[str]:
-    ws = get_workbook().worksheet(sheet_name)
-    return ws.row_values(1)
-
-
-# =========================
-# Data preparation helpers
-# =========================
-
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df.columns = [str(c).strip() for c in df.columns]
-    return df
-
-
-@st.cache_data(ttl=120, show_spinner=False)
-def load_master_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    expenses_df = normalize_columns(read_sheet("Expenses"))
-    countries_df = normalize_columns(read_sheet("Countries"))
-    usage_df = normalize_columns(read_sheet("Usage_categories"))
-    tax_df = normalize_columns(read_sheet("Tax_categories"))
-    return expenses_df, countries_df, usage_df, tax_df
-
-
-def clean_flag_value(value: Any) -> int:
-    try:
-        if value == "":
-            return 0
-        return int(float(value))
-    except Exception:
-        return 0
-
-
-def build_currency_options(countries_df: pd.DataFrame) -> List[str]:
-    if countries_df.empty or "currency_code" not in countries_df.columns:
-        return [BASE_CURRENCY]
-
-    tmp = countries_df.copy()
-    if "flag" in tmp.columns:
-        tmp = tmp[tmp["flag"].apply(clean_flag_value) == 1]
-
-    currencies = (
-        tmp["currency_code"]
-        .dropna()
-        .astype(str)
-        .str.strip()
-        .replace("", pd.NA)
-        .dropna()
-        .drop_duplicates()
-        .tolist()
-    )
-
-    if BASE_CURRENCY not in currencies:
-        currencies.append(BASE_CURRENCY)
-
-    return sorted(currencies)
-
-
-def build_category_options(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    表示名 -> id の辞書を作る。
-    name / name_ja / category_name / display_name を順に探す。
-    """
-    if df.empty:
-        return {}
-
-    id_col = "id" if "id" in df.columns else df.columns[0]
-    name_candidates = ["name", "name_ja", "category_name", "display_name"]
-    name_col = next((c for c in name_candidates if c in df.columns), None)
-    if name_col is None:
-        name_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
-
-    options: Dict[str, Any] = {}
-    for _, row in df.iterrows():
-        raw_name = row.get(name_col, "")
-        raw_id = row.get(id_col, "")
-        if pd.isna(raw_name) or str(raw_name).strip() == "":
-            continue
-        label = str(raw_name).strip()
-        options[label] = raw_id
-    return options
+RECEIPT_DIALOG_STATE_KEY = "expense_receipt_dialog_open"
+RECEIPT_BYTES_STATE_KEY = "expense_receipt_file_bytes"
+RECEIPT_NAME_STATE_KEY = "expense_receipt_file_name"
+RECEIPT_TYPE_STATE_KEY = "expense_receipt_content_type"
 
 
 # =========================
 # Exchange-rate helpers
 # =========================
-
-def get_exchange_rate(payment_date: date, currency_code: str, base_currency: str = BASE_CURRENCY) -> float:
+def get_exchange_rate(
+    payment_date: date,
+    currency_code: str,
+    base_currency: str = BASE_CURRENCY,
+) -> float:
     currency_code = currency_code.upper().strip()
     base_currency = base_currency.upper().strip()
 
@@ -190,71 +67,8 @@ def calculate_amount_base(amount: float, exchange_rate: float) -> int:
 
 
 # =========================
-# Expenses sheet append helper
-# =========================
-
-def _parse_existing_ids(expenses_df: pd.DataFrame) -> List[int]:
-    if expenses_df.empty or "id" not in expenses_df.columns:
-        return []
-
-    ids: List[int] = []
-    for value in expenses_df["id"].tolist():
-        try:
-            ids.append(int(float(value)))
-        except Exception:
-            continue
-    return ids
-
-
-def _build_expense_record(
-    expenses_df: pd.DataFrame,
-    payment_date_value: date,
-    currency_code: str,
-    amount: float,
-    exchange_rate: float,
-    amount_base: int,
-    payment_method: str,
-    description: str,
-    usage_category_id: Any,
-    tax_category_id: Any,
-) -> Dict[str, Any]:
-    now_str = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-    existing_ids = _parse_existing_ids(expenses_df)
-    new_id = (max(existing_ids) + 1) if existing_ids else 1
-
-    return {
-        "id": new_id,
-        "payment_date": payment_date_value.strftime("%Y/%m/%d"),
-        "currency_code": currency_code,
-        "amount": amount,
-        "exchange_rate": exchange_rate,
-        "amount_base": amount_base,
-        "payment_method": payment_method,
-        "description": description,
-        "usage_categories_id": usage_category_id,
-        "tax_categories_id": tax_category_id,
-        "created_at": now_str,
-        "updated_at": now_str,
-        # 万一シート側が create_at なら値を入れられるよう保険で持つ
-        #"create_at": now_str,
-        #"update_at": now_str,
-    }
-
-
-def append_expense_record(record: Dict[str, Any]) -> None:
-    ws = get_workbook().worksheet("Expenses")
-    headers = get_sheet_headers("Expenses")
-    row = [record.get(col, "") for col in headers]
-    ws.append_row(row, value_input_option="USER_ENTERED")
-    read_sheet.clear()
-    get_sheet_headers.clear()
-    load_master_data.clear()
-
-
-# =========================
 # UI
 # =========================
-
 def apply_form_css() -> None:
     st.markdown(
         """
@@ -280,7 +94,6 @@ def apply_form_css() -> None:
             font-size: 16px !important;
         }
 
-        /* dataframe のヘッダー中央揃え */
         div[data-testid="stDataFrame"] div[role="columnheader"] {
             justify-content: center !important;
             text-align: center !important;
@@ -293,12 +106,14 @@ def apply_form_css() -> None:
 
 def render_summary_preview(expenses_df: pd.DataFrame) -> None:
     st.subheader("直近の登録データ")
+
     if expenses_df.empty:
         st.info("まだ経費データがありません。")
         return
 
     preview_cols = [
-        col for col in [
+        col
+        for col in [
             "id",
             "payment_date",
             "currency_code",
@@ -354,58 +169,91 @@ def render_summary_preview(expenses_df: pd.DataFrame) -> None:
     st.dataframe(preview_df, width="content")
 
 
+def clear_receipt_state() -> None:
+    st.session_state[RECEIPT_DIALOG_STATE_KEY] = False
+    st.session_state.pop(RECEIPT_BYTES_STATE_KEY, None)
+    st.session_state.pop(RECEIPT_NAME_STATE_KEY, None)
+    st.session_state.pop(RECEIPT_TYPE_STATE_KEY, None)
+
+
+@st.dialog("レシート登録")
+def render_receipt_capture_dialog() -> None:
+    captured_file = st.camera_input("レシートを撮影", key="expense_receipt_camera")
+
+    if captured_file is not None:
+        st.session_state[RECEIPT_BYTES_STATE_KEY] = captured_file.getvalue()
+        st.session_state[RECEIPT_NAME_STATE_KEY] = captured_file.name
+        st.session_state[RECEIPT_TYPE_STATE_KEY] = captured_file.type
+        st.image(captured_file, caption="撮影したレシート", use_container_width=True)
+        st.success("レシート画像を保持しました。元の画面で「登録」を押すと保存します。")
+
+    if st.button("閉じる", use_container_width=True):
+        st.session_state[RECEIPT_DIALOG_STATE_KEY] = False
+        st.rerun()
+
+
 def main() -> None:
     apply_form_css()
+
+    user = require_authenticated_user()
+    user_id = str(getattr(user, "id"))
 
     st.title(PAGE_TITLE)
     st.caption("旅行・滞在中の支出を登録します。VND は固定レート 0.006 JPY で換算します。")
 
     try:
-        expenses_df, countries_df, usage_df, tax_df = load_master_data()
+        expenses_df, usage_df, tax_df = load_expense_master_data(user_id)
     except Exception as e:
         st.error(f"初期データの読み込みに失敗しました: {e}")
         st.stop()
 
-    usage_options = build_category_options(usage_df)
-    tax_options = build_category_options(tax_df)
+    usage_options: Dict[str, Any] = build_category_options(usage_df)
+    tax_options: Dict[str, Any] = build_category_options(tax_df)
 
     if not usage_options:
-        st.error("Usage_categories シートの読み込みに失敗したか、カテゴリが存在しません。")
+        st.error("usage_categories テーブルの読み込みに失敗したか、カテゴリが存在しません。")
         st.stop()
+
     if not tax_options:
-        st.error("Tax_categories シートの読み込みに失敗したか、カテゴリが存在しません。")
+        st.error("tax_categories テーブルの読み込みに失敗したか、カテゴリが存在しません。")
         st.stop()
 
     with st.form("expense_register_form"):
-        # 1段目
         row1_col1, row1_col2 = st.columns(2)
         with row1_col1:
             payment_date_value = st.date_input("決済日", value=date.today(), format="YYYY/MM/DD")
         with row1_col2:
             st.text_input("決済通貨", value=FIXED_PAYMENT_CURRENCY, disabled=True)
 
-        # 2段目
         row2_col1, row2_col2 = st.columns(2)
         with row2_col1:
             amount = st.number_input("金額", min_value=0.0, step=1.0, format="%.0f")
         with row2_col2:
             payment_method = st.selectbox("決済方法", PAYMENT_METHODS, index=0)
 
-        # 3段目
         row3_col1, row3_col2 = st.columns(2)
         with row3_col1:
             usage_label = st.selectbox("用途別カテゴリ", list(usage_options.keys()), index=0)
         with row3_col2:
             tax_label = st.selectbox("税務別カテゴリ", list(tax_options.keys()), index=0)
 
-        # 4段目
         description = st.text_area(
             "内容",
             placeholder="例: ランチ、ホテル代、Grab など",
             height=110,
         )
 
+        receipt_clicked = st.form_submit_button("レシート登録", width="content")
         submitted = st.form_submit_button("登録", width="content")
+
+    if receipt_clicked:
+        st.session_state[RECEIPT_DIALOG_STATE_KEY] = True
+
+    if st.session_state.get(RECEIPT_DIALOG_STATE_KEY, False):
+        render_receipt_capture_dialog()
+
+    if st.session_state.get(RECEIPT_BYTES_STATE_KEY):
+        st.caption(f"レシート撮影済み: {st.session_state.get(RECEIPT_NAME_STATE_KEY, '')}")
 
     if submitted:
         if amount <= 0:
@@ -421,8 +269,18 @@ def main() -> None:
                 f"換算結果: {amount:,.0f} {currency_code} × {exchange_rate:.6f} = {amount_base:,} {BASE_CURRENCY}"
             )
 
-            record = _build_expense_record(
-                expenses_df=expenses_df,
+            receipt_storage_path = None
+            receipt_file_bytes = st.session_state.get(RECEIPT_BYTES_STATE_KEY)
+            if receipt_file_bytes:
+                receipt_storage_path = upload_expense_receipt(
+                    file_content=receipt_file_bytes,
+                    original_file_name=str(st.session_state.get(RECEIPT_NAME_STATE_KEY, "receipt.jpg")),
+                    content_type=str(st.session_state.get(RECEIPT_TYPE_STATE_KEY, "image/jpeg")),
+                    payment_date_value=payment_date_value,
+                    auth_user_id=user_id,
+                )
+
+            record = build_expense_record(
                 payment_date_value=payment_date_value,
                 currency_code=currency_code,
                 amount=amount,
@@ -432,10 +290,15 @@ def main() -> None:
                 description=description.strip(),
                 usage_category_id=usage_options[usage_label],
                 tax_category_id=tax_options[tax_label],
+                auth_user_id=user_id,
+                receipt_storage_path=receipt_storage_path,
             )
-            append_expense_record(record)
+
+            insert_expense_record(record)
+            clear_receipt_state()
             st.success("経費を登録しました。")
             st.rerun()
+
         except Exception as e:
             st.error(f"登録に失敗しました: {e}")
 
