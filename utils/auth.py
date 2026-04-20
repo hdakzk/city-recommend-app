@@ -15,6 +15,7 @@ AUTH_COOKIE_NAME = "city_recommend_auth"
 AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 AUTH_COOKIE_PREFIX = "city-recommend-app/"
 AUTH_COOKIE_PASSWORD_SECRET_KEY = "COOKIE_PASSWORD"
+AUTH_COOKIE_MANAGER_STATE_KEY = "_auth_cookie_manager"
 
 
 def init_auth_state() -> None:
@@ -167,10 +168,14 @@ def sync_auth_cookie() -> None:
 
 
 def _get_cookie_manager() -> EncryptedCookieManager:
-    return EncryptedCookieManager(
-        prefix=AUTH_COOKIE_PREFIX,
-        password=_get_cookie_password(),
-    )
+    cookie_manager = st.session_state.get(AUTH_COOKIE_MANAGER_STATE_KEY)
+    if cookie_manager is None:
+        cookie_manager = EncryptedCookieManager(
+            prefix=AUTH_COOKIE_PREFIX,
+            password=_get_cookie_password(),
+        )
+        st.session_state[AUTH_COOKIE_MANAGER_STATE_KEY] = cookie_manager
+    return cookie_manager
 
 
 def _get_cookie_password() -> str:

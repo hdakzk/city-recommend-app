@@ -188,6 +188,24 @@ class AuthPersistenceTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, auth.AUTH_COOKIE_PASSWORD_SECRET_KEY):
                 auth._get_cookie_password()
 
+    def test_get_cookie_manager_reuses_instance_within_session(self):
+        fake_st = _FakeStreamlit()
+        fake_st.secrets = {auth.AUTH_COOKIE_PASSWORD_SECRET_KEY: "secret-password"}
+        created = []
+
+        class _SentinelCookieManager:
+            def __init__(self, **kwargs):
+                created.append(kwargs)
+
+        with patch.object(auth, "st", fake_st), patch.object(auth, "EncryptedCookieManager", _SentinelCookieManager):
+            manager1 = auth._get_cookie_manager()
+            manager2 = auth._get_cookie_manager()
+
+        self.assertIs(manager1, manager2)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["prefix"], auth.AUTH_COOKIE_PREFIX)
+        self.assertEqual(created[0]["password"], "secret-password")
+
     def test_get_current_user_keeps_auth_state_on_transient_failure(self):
         fake_st = _FakeStreamlit(
             session_state={
