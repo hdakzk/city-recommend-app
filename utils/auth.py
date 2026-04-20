@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Optional
 from urllib.parse import quote, unquote
 
 import streamlit as st
-from streamlit.components.v1 import html as components_html
+from streamlit_cookies_manager import EncryptedCookieManager
 
 from utils.supabase_client import create_public_supabase_client, get_supabase_client
 
 
 AUTH_COOKIE_NAME = "city_recommend_auth"
 AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
-AUTH_STORAGE_RESTORE_KEY = "sb_restore_from_storage_attempted"
+AUTH_COOKIE_PREFIX = "city-recommend-app/"
+AUTH_COOKIE_PASSWORD_SECRET_KEY = "COOKIE_PASSWORD"
 
 
 def init_auth_state() -> None:
@@ -21,7 +23,6 @@ def init_auth_state() -> None:
         "sb_refresh_token": None,
         "sb_session_loaded": False,
         "sb_skip_cookie_restore": False,
-        AUTH_STORAGE_RESTORE_KEY: False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -30,15 +31,17 @@ def init_auth_state() -> None:
     if st.session_state.get("sb_skip_cookie_restore") or is_logged_in():
         return
 
-    cookie_payload = _load_auth_cookie_payload(st.context.cookies.get(AUTH_COOKIE_NAME))
+    cookies = _get_cookie_manager()
+    if not cookies.ready():
+        st.stop()
+
+    cookie_payload = _load_auth_cookie_payload(cookies.get(AUTH_COOKIE_NAME))
     if not cookie_payload:
-        _request_cookie_restore_from_browser_storage_once()
         return
 
     st.session_state["sb_access_token"] = cookie_payload["access_token"]
     st.session_state["sb_refresh_token"] = cookie_payload["refresh_token"]
     st.session_state["sb_session_loaded"] = True
-    st.session_state[AUTH_STORAGE_RESTORE_KEY] = False
 
 
 def _save_session(session: Any) -> None:
@@ -57,7 +60,6 @@ def clear_auth_state() -> None:
     st.session_state["sb_refresh_token"] = None
     st.session_state["sb_session_loaded"] = False
     st.session_state["sb_skip_cookie_restore"] = True
-    st.session_state[AUTH_STORAGE_RESTORE_KEY] = False
     st.cache_data.clear()
 
 
@@ -141,93 +143,45 @@ def require_authenticated_user() -> Any:
 
 
 def sync_auth_cookie() -> None:
-    if (
-        st.session_state.get(AUTH_STORAGE_RESTORE_KEY)
-        and not is_logged_in()
-        and not st.session_state.get("sb_skip_cookie_restore")
-    ):
+    cookies = _get_cookie_manager()
+    if not cookies.ready():
         return
 
-    cookie_value = ""
-    max_age_seconds = 0
-
     if is_logged_in():
-        cookie_value = _dump_auth_cookie_payload(
+        cookies[AUTH_COOKIE_NAME] = _dump_auth_cookie_payload(
             st.session_state.get("sb_access_token"),
             st.session_state.get("sb_refresh_token"),
         )
-        max_age_seconds = AUTH_COOKIE_MAX_AGE_SECONDS if cookie_value else 0
+    else:
+        if cookies.get(AUTH_COOKIE_NAME):
+            del cookies[AUTH_COOKIE_NAME]
 
-    secure_attr_script = "window.location.protocol === 'https:' ? '; Secure' : ''"
-    components_html(
-        f"""
-        <script>
-        const cookieString = "{AUTH_COOKIE_NAME}={cookie_value}; Max-Age={max_age_seconds}; Path=/; SameSite=Lax" + ({secure_attr_script});
-        try {{
-            document.cookie = cookieString;
-        }} catch (error) {{}}
+    cookies.save()
 
-        try {{
-            window.parent.document.cookie = cookieString;
-        }} catch (error) {{}}
 
-        try {{
-            if ({'true' if max_age_seconds else 'false'}) {{
-                window.localStorage.setItem("{AUTH_COOKIE_NAME}", "{cookie_value}");
-            }} else {{
-                window.localStorage.removeItem("{AUTH_COOKIE_NAME}");
-            }}
-        }} catch (error) {{}}
-
-        try {{
-            if ({'true' if max_age_seconds else 'false'}) {{
-                window.parent.localStorage.setItem("{AUTH_COOKIE_NAME}", "{cookie_value}");
-            }} else {{
-                window.parent.localStorage.removeItem("{AUTH_COOKIE_NAME}");
-            }}
-        }} catch (error) {{}}
-        </script>
-        """,
-        height=0,
+def _get_cookie_manager() -> EncryptedCookieManager:
+    return EncryptedCookieManager(
+        prefix=AUTH_COOKIE_PREFIX,
+        password=_get_cookie_password(),
     )
 
 
-def _request_cookie_restore_from_browser_storage_once() -> None:
-    if st.session_state.get(AUTH_STORAGE_RESTORE_KEY):
-        return
+def _get_cookie_password() -> str:
+    configured_password = str(st.secrets.get(AUTH_COOKIE_PASSWORD_SECRET_KEY, "")).strip()
+    if configured_password:
+        return configured_password
 
-    st.session_state[AUTH_STORAGE_RESTORE_KEY] = True
-    secure_attr_script = "window.location.protocol === 'https:' ? '; Secure' : ''"
-    components_html(
-        f"""
-        <script>
-        const storageKey = "{AUTH_COOKIE_NAME}";
-        let storedValue = "";
+    env_password = str(os.environ.get(AUTH_COOKIE_PASSWORD_SECRET_KEY, "")).strip()
+    if env_password:
+        return env_password
 
-        try {{
-            storedValue = window.parent.localStorage.getItem(storageKey) || window.localStorage.getItem(storageKey) || "";
-        }} catch (error) {{}}
+    supabase_password = str(st.secrets.get("supabase", {}).get("anon_key", "")).strip()
+    if supabase_password:
+        return supabase_password
 
-        if (storedValue) {{
-            const cookieString = "{AUTH_COOKIE_NAME}=" + storedValue + "; Max-Age={AUTH_COOKIE_MAX_AGE_SECONDS}; Path=/; SameSite=Lax" + ({secure_attr_script});
-
-            try {{
-                document.cookie = cookieString;
-            }} catch (error) {{}}
-
-            try {{
-                window.parent.document.cookie = cookieString;
-            }} catch (error) {{}}
-
-            try {{
-                window.parent.location.reload();
-            }} catch (error) {{
-                window.location.reload();
-            }}
-        }}
-        </script>
-        """,
-        height=0,
+    raise ValueError(
+        f"{AUTH_COOKIE_PASSWORD_SECRET_KEY} が設定されていません。"
+        " 本番環境の secrets に認証 Cookie 用のパスワードを追加してください。"
     )
 
 
