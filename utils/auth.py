@@ -159,12 +159,16 @@ def sync_auth_cookie() -> None:
         max_age_seconds = AUTH_COOKIE_MAX_AGE_SECONDS if cookie_value else 0
 
     secure_attr_script = "window.location.protocol === 'https:' ? '; Secure' : ''"
-    _render_auth_script(
+    components_html(
         f"""
         <script>
         const cookieString = "{AUTH_COOKIE_NAME}={cookie_value}; Max-Age={max_age_seconds}; Path=/; SameSite=Lax" + ({secure_attr_script});
         try {{
             document.cookie = cookieString;
+        }} catch (error) {{}}
+
+        try {{
+            window.parent.document.cookie = cookieString;
         }} catch (error) {{}}
 
         try {{
@@ -174,8 +178,17 @@ def sync_auth_cookie() -> None:
                 window.localStorage.removeItem("{AUTH_COOKIE_NAME}");
             }}
         }} catch (error) {{}}
+
+        try {{
+            if ({'true' if max_age_seconds else 'false'}) {{
+                window.parent.localStorage.setItem("{AUTH_COOKIE_NAME}", "{cookie_value}");
+            }} else {{
+                window.parent.localStorage.removeItem("{AUTH_COOKIE_NAME}");
+            }}
+        }} catch (error) {{}}
         </script>
-        """
+        """,
+        height=0,
     )
 
 
@@ -185,14 +198,14 @@ def _request_cookie_restore_from_browser_storage_once() -> None:
 
     st.session_state[AUTH_STORAGE_RESTORE_KEY] = True
     secure_attr_script = "window.location.protocol === 'https:' ? '; Secure' : ''"
-    _render_auth_script(
+    components_html(
         f"""
         <script>
         const storageKey = "{AUTH_COOKIE_NAME}";
         let storedValue = "";
 
         try {{
-            storedValue = window.localStorage.getItem(storageKey) || "";
+            storedValue = window.parent.localStorage.getItem(storageKey) || window.localStorage.getItem(storageKey) || "";
         }} catch (error) {{}}
 
         if (storedValue) {{
@@ -202,20 +215,20 @@ def _request_cookie_restore_from_browser_storage_once() -> None:
                 document.cookie = cookieString;
             }} catch (error) {{}}
 
-            window.location.reload();
+            try {{
+                window.parent.document.cookie = cookieString;
+            }} catch (error) {{}}
+
+            try {{
+                window.parent.location.reload();
+            }} catch (error) {{
+                window.location.reload();
+            }}
         }}
         </script>
-        """
+        """,
+        height=0,
     )
-
-
-def _render_auth_script(source: str) -> None:
-    html_renderer = getattr(st, "html", None)
-    if callable(html_renderer):
-        html_renderer(source)
-        return
-
-    components_html(source, height=0)
 
 
 def _dump_auth_cookie_payload(
