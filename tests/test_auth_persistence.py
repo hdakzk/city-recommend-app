@@ -111,6 +111,22 @@ class AuthPersistenceTest(unittest.TestCase):
         )
         self.assertEqual(fake_cookies.save_call_count, 1)
 
+    def test_sync_auth_cookie_does_not_resave_when_cookie_is_already_current(self):
+        fake_st = _FakeStreamlit(
+            session_state={
+                "sb_access_token": "access-1",
+                "sb_refresh_token": "refresh-1",
+            }
+        )
+        cookie_value = auth._dump_auth_cookie_payload("access-1", "refresh-1")
+        fake_cookies = _FakeCookieManager(initial={auth.AUTH_COOKIE_NAME: cookie_value})
+
+        with patch.object(auth, "st", fake_st), patch.object(auth, "_get_cookie_manager", return_value=fake_cookies):
+            auth.sync_auth_cookie()
+
+        self.assertEqual(fake_cookies[auth.AUTH_COOKIE_NAME], cookie_value)
+        self.assertEqual(fake_cookies.save_call_count, 0)
+
     def test_sync_auth_cookie_clears_cookie_when_logged_out(self):
         fake_st = _FakeStreamlit(
             session_state={

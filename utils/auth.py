@@ -147,16 +147,23 @@ def sync_auth_cookie() -> None:
     if not cookies.ready():
         return
 
+    changed = False
+
     if is_logged_in():
-        cookies[AUTH_COOKIE_NAME] = _dump_auth_cookie_payload(
+        cookie_value = _dump_auth_cookie_payload(
             st.session_state.get("sb_access_token"),
             st.session_state.get("sb_refresh_token"),
         )
+        if cookies.get(AUTH_COOKIE_NAME) != cookie_value:
+            cookies[AUTH_COOKIE_NAME] = cookie_value
+            changed = True
     else:
         if cookies.get(AUTH_COOKIE_NAME):
             del cookies[AUTH_COOKIE_NAME]
+            changed = True
 
-    cookies.save()
+    if changed:
+        cookies.save()
 
 
 def _get_cookie_manager() -> EncryptedCookieManager:
