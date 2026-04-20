@@ -57,6 +57,7 @@ def clear_auth_state() -> None:
     st.session_state["sb_refresh_token"] = None
     st.session_state["sb_session_loaded"] = False
     st.session_state["sb_skip_cookie_restore"] = True
+    st.session_state[AUTH_STORAGE_RESTORE_KEY] = False
     st.cache_data.clear()
 
 
@@ -140,6 +141,13 @@ def require_authenticated_user() -> Any:
 
 
 def sync_auth_cookie() -> None:
+    if (
+        st.session_state.get(AUTH_STORAGE_RESTORE_KEY)
+        and not is_logged_in()
+        and not st.session_state.get("sb_skip_cookie_restore")
+    ):
+        return
+
     cookie_value = ""
     max_age_seconds = 0
 

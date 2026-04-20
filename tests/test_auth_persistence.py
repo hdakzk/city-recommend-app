@@ -125,6 +125,21 @@ class AuthPersistenceTest(unittest.TestCase):
         self.assertIn("Max-Age=0", fake_st.rendered_html[0])
         self.assertIn("window.localStorage.removeItem", fake_st.rendered_html[0])
 
+    def test_sync_auth_cookie_skips_clearing_while_browser_restore_is_pending(self):
+        fake_st = _FakeStreamlit(
+            session_state={
+                "sb_access_token": None,
+                "sb_refresh_token": None,
+                auth.AUTH_STORAGE_RESTORE_KEY: True,
+                "sb_skip_cookie_restore": False,
+            }
+        )
+
+        with patch.object(auth, "st", fake_st):
+            auth.sync_auth_cookie()
+
+        self.assertEqual(fake_st.rendered_html, [])
+
     def test_render_auth_script_falls_back_to_component_html_when_streamlit_html_missing(self):
         fake_st = _FakeStreamlit()
         fake_st.html = None
