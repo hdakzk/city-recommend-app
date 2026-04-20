@@ -51,6 +51,34 @@ class AuthPersistenceTest(unittest.TestCase):
         self.assertEqual(fake_st.session_state["sb_refresh_token"], "refresh-1")
         self.assertTrue(fake_st.session_state["sb_session_loaded"])
         self.assertFalse(fake_st.session_state["sb_skip_cookie_restore"])
+        self.assertFalse(fake_st.session_state[auth.AUTH_STORAGE_RESTORE_KEY])
+
+    def test_init_auth_state_requests_browser_storage_restore_once_when_cookie_missing(self):
+        fake_st = _FakeStreamlit()
+        rendered = {}
+
+        def fake_components_html(source, height=0):
+            rendered["source"] = source
+            rendered["height"] = height
+
+        with patch.object(auth, "st", fake_st), patch.object(auth, "components_html", fake_components_html):
+            auth.init_auth_state()
+
+        self.assertIsNone(fake_st.session_state["sb_access_token"])
+        self.assertIsNone(fake_st.session_state["sb_refresh_token"])
+        self.assertFalse(fake_st.session_state["sb_session_loaded"])
+        self.assertTrue(fake_st.session_state[auth.AUTH_STORAGE_RESTORE_KEY])
+        self.assertEqual(rendered["height"], 0)
+        self.assertIn("localStorage.getItem", rendered["source"])
+        self.assertIn("location.reload", rendered["source"])
+
+    def test_init_auth_state_requests_browser_storage_restore_only_once(self):
+        fake_st = _FakeStreamlit(session_state={auth.AUTH_STORAGE_RESTORE_KEY: True})
+
+        with patch.object(auth, "st", fake_st), patch.object(auth, "components_html") as mocked_html:
+            auth.init_auth_state()
+
+        mocked_html.assert_not_called()
 
     def test_init_auth_state_does_not_restore_cookie_after_explicit_logout(self):
         cookie_value = auth._dump_auth_cookie_payload("access-1", "refresh-1")
@@ -87,6 +115,8 @@ class AuthPersistenceTest(unittest.TestCase):
         self.assertIn(f"{auth.AUTH_COOKIE_NAME}=", rendered["source"])
         self.assertIn("Max-Age=2592000", rendered["source"])
         self.assertIn("SameSite=Lax", rendered["source"])
+        self.assertIn("window.parent.document.cookie", rendered["source"])
+        self.assertIn("window.parent.localStorage.setItem", rendered["source"])
 
     def test_sync_auth_cookie_clears_cookie_when_logged_out(self):
         fake_st = _FakeStreamlit(
@@ -106,6 +136,7 @@ class AuthPersistenceTest(unittest.TestCase):
 
         self.assertIn(f"{auth.AUTH_COOKIE_NAME}=", rendered["source"])
         self.assertIn("Max-Age=0", rendered["source"])
+        self.assertIn("window.parent.localStorage.removeItem", rendered["source"])
 
 
 if __name__ == "__main__":

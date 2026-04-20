@@ -12,6 +12,7 @@ from utils.supabase_client import create_public_supabase_client, get_supabase_cl
 
 AUTH_COOKIE_NAME = "city_recommend_auth"
 AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
+AUTH_STORAGE_RESTORE_KEY = "sb_restore_from_storage_attempted"
 
 
 def init_auth_state() -> None:
@@ -20,6 +21,7 @@ def init_auth_state() -> None:
         "sb_refresh_token": None,
         "sb_session_loaded": False,
         "sb_skip_cookie_restore": False,
+        AUTH_STORAGE_RESTORE_KEY: False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -30,11 +32,13 @@ def init_auth_state() -> None:
 
     cookie_payload = _load_auth_cookie_payload(st.context.cookies.get(AUTH_COOKIE_NAME))
     if not cookie_payload:
+        _request_cookie_restore_from_browser_storage_once()
         return
 
     st.session_state["sb_access_token"] = cookie_payload["access_token"]
     st.session_state["sb_refresh_token"] = cookie_payload["refresh_token"]
     st.session_state["sb_session_loaded"] = True
+    st.session_state[AUTH_STORAGE_RESTORE_KEY] = False
 
 
 def _save_session(session: Any) -> None:
@@ -150,7 +154,68 @@ def sync_auth_cookie() -> None:
     components_html(
         f"""
         <script>
-        document.cookie = "{AUTH_COOKIE_NAME}={cookie_value}; Max-Age={max_age_seconds}; Path=/; SameSite=Lax" + ({secure_attr_script});
+        const cookieString = "{AUTH_COOKIE_NAME}={cookie_value}; Max-Age={max_age_seconds}; Path=/; SameSite=Lax" + ({secure_attr_script});
+        try {{
+            document.cookie = cookieString;
+        }} catch (error) {{}}
+        try {{
+            window.parent.document.cookie = cookieString;
+        }} catch (error) {{}}
+
+        try {{
+            if ({'true' if max_age_seconds else 'false'}) {{
+                window.localStorage.setItem("{AUTH_COOKIE_NAME}", "{cookie_value}");
+            }} else {{
+                window.localStorage.removeItem("{AUTH_COOKIE_NAME}");
+            }}
+        }} catch (error) {{}}
+
+        try {{
+            if ({'true' if max_age_seconds else 'false'}) {{
+                window.parent.localStorage.setItem("{AUTH_COOKIE_NAME}", "{cookie_value}");
+            }} else {{
+                window.parent.localStorage.removeItem("{AUTH_COOKIE_NAME}");
+            }}
+        }} catch (error) {{}}
+        </script>
+        """,
+        height=0,
+    )
+
+
+def _request_cookie_restore_from_browser_storage_once() -> None:
+    if st.session_state.get(AUTH_STORAGE_RESTORE_KEY):
+        return
+
+    st.session_state[AUTH_STORAGE_RESTORE_KEY] = True
+    secure_attr_script = "window.location.protocol === 'https:' ? '; Secure' : ''"
+    components_html(
+        f"""
+        <script>
+        const storageKey = "{AUTH_COOKIE_NAME}";
+        let storedValue = "";
+
+        try {{
+            storedValue = window.parent.localStorage.getItem(storageKey) || window.localStorage.getItem(storageKey) || "";
+        }} catch (error) {{}}
+
+        if (storedValue) {{
+            const cookieString = "{AUTH_COOKIE_NAME}=" + storedValue + "; Max-Age={AUTH_COOKIE_MAX_AGE_SECONDS}; Path=/; SameSite=Lax" + ({secure_attr_script});
+
+            try {{
+                window.parent.document.cookie = cookieString;
+            }} catch (error) {{}}
+
+            try {{
+                document.cookie = cookieString;
+            }} catch (error) {{}}
+
+            try {{
+                window.parent.location.reload();
+            }} catch (error) {{
+                window.location.reload();
+            }}
+        }}
         </script>
         """,
         height=0,
