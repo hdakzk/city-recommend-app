@@ -1,3 +1,10 @@
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import streamlit as st
 
 from utils.auth import (
@@ -54,7 +61,7 @@ with st.sidebar:
         user_email = getattr(user, "email", "") or "ログイン中"
         st.success(f"ログイン中: {user_email}")
 
-        if st.button("ログアウト", use_container_width=True):
+        if st.button("ログアウト", width="stretch"):
             try:
                 sign_out()
                 st.success("ログアウトしました。")
@@ -63,7 +70,7 @@ with st.sidebar:
                 st.error(f"ログアウトに失敗しました: {e}")
     else:
         render_login_form(key_prefix="sidebar_auth")
-        if st.button("新規登録", use_container_width=True):
+        if st.button("新規登録", width="stretch"):
             st.session_state[SIGNUP_PAGE_STATE_KEY] = True
             st.rerun()
 

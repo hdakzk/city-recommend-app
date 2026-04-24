@@ -140,7 +140,7 @@ def render_login_form(key_prefix: str = "auth") -> None:
     with st.form(f"{key_prefix}_login_form", clear_on_submit=False):
         login_email = st.text_input("メールアドレス", key=f"{key_prefix}_login_email")
         login_password = st.text_input("パスワード", type="password", key=f"{key_prefix}_login_password")
-        login_submitted = st.form_submit_button("ログイン", use_container_width=True)
+        login_submitted = st.form_submit_button("ログイン", width="stretch")
 
     if login_submitted:
         if not login_email.strip() or not login_password:
@@ -205,7 +205,7 @@ def render_signup_form(key_prefix: str = "signup") -> None:
             key=f"{key_prefix}_default_currency_code",
         )
 
-        signup_submitted = st.form_submit_button("新規登録", use_container_width=True)
+        signup_submitted = st.form_submit_button("新規登録", width="stretch")
 
     if signup_submitted:
         if not signup_email.strip() or not signup_password:

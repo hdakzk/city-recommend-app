@@ -1,6 +1,12 @@
+from pathlib import Path
+import sys
 import math
 from datetime import date
 from typing import Any, Dict
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
 import requests
@@ -183,10 +189,10 @@ def render_receipt_capture_dialog() -> None:
         st.session_state[RECEIPT_BYTES_STATE_KEY] = captured_file.getvalue()
         st.session_state[RECEIPT_NAME_STATE_KEY] = captured_file.name
         st.session_state[RECEIPT_TYPE_STATE_KEY] = captured_file.type
-        st.image(captured_file, caption="撮影したレシート", use_container_width=True)
+        st.image(captured_file, caption="撮影したレシート", width="stretch")
         st.success("レシート画像を保持しました。元の画面で「登録」を押すと保存します。")
 
-    if st.button("閉じる", use_container_width=True):
+    if st.button("閉じる", width="stretch"):
         st.session_state[RECEIPT_DIALOG_STATE_KEY] = False
         st.rerun()
 

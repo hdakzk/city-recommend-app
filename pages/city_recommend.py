@@ -1,5 +1,11 @@
+from pathlib import Path
+import sys
 import time
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
 import streamlit as st
@@ -423,7 +429,7 @@ if st.session_state.get("city_search_submitted"):
                     "page_total_ms": page_total_ms,
                 }
             )
-            st.dataframe(pd.DataFrame(debug_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(debug_rows), width="stretch", hide_index=True)
 
 else:
     st.info("条件を入れて検索すると、月ごとのおすすめ都市を表示します。")

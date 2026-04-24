@@ -1,4 +1,10 @@
+from pathlib import Path
+import sys
 from datetime import date
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import altair as alt
 import numpy as np
@@ -395,7 +401,7 @@ def render_monthly_stacked_chart(
         .configure_view(strokeWidth=0)
     )
 
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
 
 def resolve_category_name_column(df: pd.DataFrame, table_label: str) -> str:
@@ -476,11 +482,11 @@ def render_wechat_import_dialog(user_id: str, existing_expenses_df: pd.DataFrame
         import_clicked = st.button(
             "取り込む",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=uploaded_file is None,
         )
     with col_cancel:
-        cancel_clicked = st.button("閉じる", use_container_width=True)
+        cancel_clicked = st.button("閉じる", width="stretch")
 
     if cancel_clicked:
         reset_wechat_import_state()
@@ -590,9 +596,9 @@ def render_expense_edit_dialog(
 
         col_save, col_close = st.columns(2)
         with col_save:
-            save_clicked = st.form_submit_button("保存", type="primary", use_container_width=True)
+            save_clicked = st.form_submit_button("保存", type="primary", width="stretch")
         with col_close:
-            close_clicked = st.form_submit_button("閉じる", use_container_width=True)
+            close_clicked = st.form_submit_button("閉じる", width="stretch")
 
     if close_clicked:
         reset_expense_edit_state()

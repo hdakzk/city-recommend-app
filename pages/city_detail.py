@@ -1,5 +1,11 @@
+from pathlib import Path
+import sys
 import time
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
 import streamlit as st
@@ -204,7 +210,7 @@ def _render_youtube(videos_df: pd.DataFrame) -> None:
         "duration_sec": "秒数",
     }
     view_df = view_df.rename(columns=rename_map)
-    st.dataframe(view_df, use_container_width=True, hide_index=True)
+    st.dataframe(view_df, width="stretch", hide_index=True)
 
 
 st.title("都市詳細")
@@ -256,7 +262,7 @@ with tab2:
         if monthly_climate_df.empty:
             st.info("気候データがありません。")
         else:
-            st.dataframe(monthly_climate_df, use_container_width=True, hide_index=True)
+            st.dataframe(monthly_climate_df, width="stretch", hide_index=True)
     _measure(debug_rows, "render_climate", _render_climate)
 
 with tab3:
@@ -280,4 +286,4 @@ with st.expander("パフォーマンスデバッグ", expanded=True):
             "page_total_ms": page_total_ms,
         }
     )
-    st.dataframe(pd.DataFrame(debug_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(debug_rows), width="stretch", hide_index=True)

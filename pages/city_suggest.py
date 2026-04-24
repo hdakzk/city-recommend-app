@@ -1,6 +1,12 @@
+from pathlib import Path
+import sys
 import math
 import time
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import folium
 import numpy as np
@@ -321,14 +327,8 @@ if "city_suggest_area2_live" not in st.session_state:
 if "city_suggest_country_id_live" not in st.session_state:
     st.session_state["city_suggest_country_id_live"] = None
 
-if "city_suggest_country_label_live" not in st.session_state:
-    st.session_state["city_suggest_country_label_live"] = None
-
 if "city_suggest_city_id_live" not in st.session_state:
     st.session_state["city_suggest_city_id_live"] = None
-
-if "city_suggest_city_label_live" not in st.session_state:
-    st.session_state["city_suggest_city_label_live"] = None
 
 
 def on_area1_change():
@@ -351,9 +351,7 @@ def on_area1_change():
     current_country_id = st.session_state.get("city_suggest_country_id_live")
     if current_country_id not in valid_country_ids:
         st.session_state["city_suggest_country_id_live"] = None
-        st.session_state["city_suggest_country_label_live"] = None
         st.session_state["city_suggest_city_id_live"] = None
-        st.session_state["city_suggest_city_label_live"] = None
 
 
 def on_area2_change():
@@ -367,17 +365,11 @@ def on_area2_change():
     current_country_id = st.session_state.get("city_suggest_country_id_live")
     if current_country_id not in valid_country_ids:
         st.session_state["city_suggest_country_id_live"] = None
-        st.session_state["city_suggest_country_label_live"] = None
         st.session_state["city_suggest_city_id_live"] = None
-        st.session_state["city_suggest_city_label_live"] = None
 
 
 def on_country_change():
-    selected_country_label = st.session_state.get("city_suggest_country_label_live")
-    selected_country_id = country_label_to_id.get(selected_country_label) if selected_country_label else None
-    st.session_state["city_suggest_country_id_live"] = selected_country_id
     st.session_state["city_suggest_city_id_live"] = None
-    st.session_state["city_suggest_city_label_live"] = None
 
 
 st.subheader("都市選択")
@@ -410,31 +402,26 @@ country_df = get_country_df(
 country_ids = country_df["country_id"].astype(int).tolist()
 country_option_records = build_country_option_records(country_df.to_dict("records"))
 country_label_map = {int(x["country_id"]): safe_text(x["label"]) for x in country_option_records}
-country_labels = [safe_text(x["label"]) for x in country_option_records]
-country_label_to_id = {safe_text(x["label"]): int(x["country_id"]) for x in country_option_records}
+country_name_map = {
+    int(row["country_id"]): safe_text(row["country"])
+    for _, row in country_df.drop_duplicates(subset=["country_id"]).iterrows()
+}
 
 st.session_state["city_suggest_country_id_live"] = sync_single_select_value(
     st.session_state["city_suggest_country_id_live"],
     country_ids,
 )
 
-if st.session_state["city_suggest_country_label_live"] not in country_labels:
-    current_country_id = st.session_state["city_suggest_country_id_live"]
-    st.session_state["city_suggest_country_label_live"] = (
-        country_label_map.get(int(current_country_id), "") if current_country_id is not None else None
-    )
-
 st.selectbox(
     "対象国",
-    options=[None] + country_labels,
-    key="city_suggest_country_label_live",
+    options=[None] + country_ids,
+    key="city_suggest_country_id_live",
+    format_func=lambda x: "対象国を選択" if x is None else country_label_map.get(int(x), ""),
     on_change=on_country_change,
 )
 
-selected_country_label = st.session_state["city_suggest_country_label_live"]
-selected_country_id = country_label_to_id.get(selected_country_label) if selected_country_label else None
-st.session_state["city_suggest_country_id_live"] = selected_country_id
-selected_country_name = country_label_map.get(int(selected_country_id), "") if selected_country_id is not None else ""
+selected_country_id = st.session_state["city_suggest_country_id_live"]
+selected_country_name = country_name_map.get(int(selected_country_id), "") if selected_country_id is not None else ""
 
 city_master = pd.DataFrame()
 city_option_records: list[dict[str, Any]] = []
@@ -448,30 +435,22 @@ if selected_country_id is not None:
 
 city_label_map = get_city_label_map(city_option_records)
 city_ids = [int(x["city_id"]) for x in city_option_records]
-city_labels = [safe_text(x["label"]) for x in city_option_records]
-city_label_to_id = {safe_text(x["label"]): int(x["city_id"]) for x in city_option_records}
 
 st.session_state["city_suggest_city_id_live"] = sync_single_select_value(
     st.session_state["city_suggest_city_id_live"],
     city_ids,
 )
 
-if st.session_state["city_suggest_city_label_live"] not in city_labels:
-    current_city_id = st.session_state["city_suggest_city_id_live"]
-    st.session_state["city_suggest_city_label_live"] = city_label_map.get(int(current_city_id), "") if current_city_id is not None else None
-
-city_select_options = [None] + city_labels
-
 st.selectbox(
     "基準都市",
-    options=city_select_options,
-    key="city_suggest_city_label_live",
+    options=[None] + city_ids,
+    key="city_suggest_city_id_live",
+    format_func=lambda x: "基準都市を選択" if x is None else city_label_map.get(int(x), ""),
     disabled=(len(city_ids) == 0),
 )
 
-selected_city_label = st.session_state["city_suggest_city_label_live"]
-selected_city_id = city_label_to_id.get(selected_city_label) if selected_city_label else None
-st.session_state["city_suggest_city_id_live"] = selected_city_id
+selected_city_id = st.session_state["city_suggest_city_id_live"]
+selected_city_label = city_label_map.get(int(selected_city_id), "") if selected_city_id is not None else ""
 
 selection_debug_snapshot = build_selection_debug_snapshot(
     selected_country_name=selected_country_name,
@@ -746,7 +725,7 @@ if search_state:
     debug_rows.append({"process": "build_result_table", "ms": round((time.perf_counter() - t0) * 1000, 3)})
 
     def render_result_table():
-        st.dataframe(result_table, use_container_width=True, hide_index=True)
+        st.dataframe(result_table, width="stretch", hide_index=True)
 
     measure(debug_rows, "render_result_table", render_result_table)
 
@@ -797,4 +776,4 @@ if search_state:
                     "page_total_ms": page_total_ms,
                 }
             )
-            st.dataframe(pd.DataFrame(debug_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(debug_rows), width="stretch", hide_index=True)

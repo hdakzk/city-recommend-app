@@ -1,3 +1,10 @@
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import streamlit as st
 
 from utils.auth import require_authenticated_user
@@ -110,7 +117,7 @@ def main() -> None:
             index=currency_options.index(resolved_default) if resolved_default in currency_options else 0,
         )
 
-        submitted = st.form_submit_button("保存", use_container_width=True)
+        submitted = st.form_submit_button("保存", width="stretch")
 
     if submitted:
         if not email.strip():

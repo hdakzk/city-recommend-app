@@ -1,4 +1,10 @@
+from pathlib import Path
+import sys
 from datetime import date
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
 import streamlit as st
@@ -105,7 +111,7 @@ def main() -> None:
             step=1000,
             value=int(current_budget_amount),
         )
-        submitted = st.form_submit_button("登録", use_container_width=True)
+        submitted = st.form_submit_button("登録", width="stretch")
 
     if submitted:
         try:
