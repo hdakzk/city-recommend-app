@@ -14,11 +14,10 @@ from utils.expense_db import (
     load_expense_master_data,
     upload_expense_receipt,
 )
+from utils.user_settings import load_user_account_data, resolve_user_expense_preferences
 
 PAGE_TITLE = "経費登録"
-BASE_CURRENCY = "JPY"
 VND_FIXED_RATE_TO_JPY = 0.006
-FIXED_PAYMENT_CURRENCY = "VND"
 PAYMENT_METHODS = ["現金", "クレジットカード", "電子決済", "WISE"]
 FRANKFURTER_URL = "https://api.frankfurter.dev/v2/rates"
 RECEIPT_DIALOG_STATE_KEY = "expense_receipt_dialog_open"
@@ -33,7 +32,7 @@ RECEIPT_TYPE_STATE_KEY = "expense_receipt_content_type"
 def get_exchange_rate(
     payment_date: date,
     currency_code: str,
-    base_currency: str = BASE_CURRENCY,
+    base_currency: str = "JPY",
 ) -> float:
     currency_code = currency_code.upper().strip()
     base_currency = base_currency.upper().strip()
@@ -199,7 +198,22 @@ def main() -> None:
     user_id = str(getattr(user, "id"))
 
     st.title(PAGE_TITLE)
-    st.caption("旅行・滞在中の支出を登録します。VND は固定レート 0.006 JPY で換算します。")
+    try:
+        account_data = load_user_account_data(user_id)
+        preference = resolve_user_expense_preferences(
+            account_data.get("settings"),
+            account_data.get("currencies"),
+        )
+    except Exception as e:
+        st.error(f"ユーザー設定の読み込みに失敗しました: {e}")
+        st.stop()
+
+    payment_currency_code = preference["payment_currency_code"]
+    base_currency_code = preference["base_currency_code"]
+
+    st.caption(
+        f"旅行・滞在中の支出を登録します。決済通貨は {payment_currency_code}、基準通貨は {base_currency_code} です。"
+    )
 
     try:
         expenses_df, usage_df, tax_df = load_expense_master_data(user_id)
@@ -223,7 +237,7 @@ def main() -> None:
         with row1_col1:
             payment_date_value = st.date_input("決済日", value=date.today(), format="YYYY/MM/DD")
         with row1_col2:
-            st.text_input("決済通貨", value=FIXED_PAYMENT_CURRENCY, disabled=True)
+            st.text_input("決済通貨", value=payment_currency_code, disabled=True)
 
         row2_col1, row2_col2 = st.columns(2)
         with row2_col1:
@@ -261,12 +275,12 @@ def main() -> None:
             st.stop()
 
         try:
-            currency_code = FIXED_PAYMENT_CURRENCY
-            exchange_rate = get_exchange_rate(payment_date_value, currency_code, BASE_CURRENCY)
+            currency_code = payment_currency_code
+            exchange_rate = get_exchange_rate(payment_date_value, currency_code, base_currency_code)
             amount_base = calculate_amount_base(amount, exchange_rate)
 
             st.info(
-                f"換算結果: {amount:,.0f} {currency_code} × {exchange_rate:.6f} = {amount_base:,} {BASE_CURRENCY}"
+                f"換算結果: {amount:,.0f} {currency_code} × {exchange_rate:.6f} = {amount_base:,} {base_currency_code}"
             )
 
             receipt_storage_path = None

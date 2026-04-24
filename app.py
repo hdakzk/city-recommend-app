@@ -4,10 +4,13 @@ from utils.auth import (
     get_current_user,
     init_auth_state,
     is_logged_in,
+    render_login_form,
+    render_signup_form,
     sign_out,
-    render_auth_forms,
     sync_auth_cookie,
 )
+
+SIGNUP_PAGE_STATE_KEY = "signup_page_open"
 
 st.set_page_config(
     page_title="Travel Support App",
@@ -15,6 +18,8 @@ st.set_page_config(
 )
 
 init_auth_state()
+if SIGNUP_PAGE_STATE_KEY not in st.session_state:
+    st.session_state[SIGNUP_PAGE_STATE_KEY] = False
 
 st.markdown(
     """
@@ -39,8 +44,11 @@ user = get_current_user()
 logged_in = user is not None and is_logged_in()
 sync_auth_cookie()
 
+if logged_in:
+    st.session_state[SIGNUP_PAGE_STATE_KEY] = False
+
 with st.sidebar:
-    st.markdown("## アカウント")
+    st.markdown("## ログイン")
 
     if logged_in:
         user_email = getattr(user, "email", "") or "ログイン中"
@@ -54,7 +62,19 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"ログアウトに失敗しました: {e}")
     else:
-        render_auth_forms(key_prefix="sidebar_auth")
+        render_login_form(key_prefix="sidebar_auth")
+        if st.button("新規登録", use_container_width=True):
+            st.session_state[SIGNUP_PAGE_STATE_KEY] = True
+            st.rerun()
+
+if st.session_state.get(SIGNUP_PAGE_STATE_KEY, False) and not logged_in:
+    st.title("新規登録")
+    st.caption("プロフィール、基準通貨、既定の決済通貨を登録します。")
+    if st.button("閉じる", width="content"):
+        st.session_state[SIGNUP_PAGE_STATE_KEY] = False
+        st.rerun()
+    render_signup_form(key_prefix="main_signup")
+    st.stop()
 
 # city_detail.py は一覧からの内部遷移専用なので、メニューには含めない。
 expense_register_page = st.Page(
@@ -89,6 +109,12 @@ city_suggest_page = st.Page(
     icon="🧭",
 )
 
+user_settings_page = st.Page(
+    "pages/user_settings.py",
+    title="ユーザー設定",
+    icon="⚙️",
+)
+
 pg = st.navigation(
     {
         "menu": [
@@ -97,6 +123,7 @@ pg = st.navigation(
             budget_manage_page,
             city_recommend_page,
             city_suggest_page,
+            user_settings_page,
         ]
     },
     position="sidebar",

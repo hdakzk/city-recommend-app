@@ -8,6 +8,14 @@ import streamlit as st
 from streamlit.components.v1 import html as components_html
 
 from utils.supabase_client import create_public_supabase_client, get_supabase_client
+from utils.user_settings import (
+    DEFAULT_BASE_CURRENCY,
+    DEFAULT_PAYMENT_CURRENCY,
+    bootstrap_user_account_from_auth_user,
+    build_signup_metadata,
+    load_available_currency_codes,
+    normalize_currency_selection,
+)
 
 
 AUTH_COOKIE_NAME = "city_recommend_auth"
@@ -63,18 +71,32 @@ def is_logged_in() -> bool:
     )
 
 
-def sign_up(email: str, password: str):
+def sign_up(
+    email: str,
+    password: str,
+    *,
+    signup_metadata: dict[str, Any] | None = None,
+):
     client = create_public_supabase_client()
-    response = client.auth.sign_up(
-        {
-            "email": email,
-            "password": password,
-        }
-    )
+    payload: dict[str, Any] = {
+        "email": email,
+        "password": password,
+    }
+    if signup_metadata:
+        payload["options"] = {"data": signup_metadata}
+
+    response = client.auth.sign_up(payload)
+    user = getattr(response, "user", None)
+    if user is None:
+        raise ValueError("アカウントを作成できませんでした。認証設定と入力内容を確認してください。")
 
     session = getattr(response, "session", None)
     if session:
         _save_session(session)
+        try:
+            bootstrap_user_account_from_auth_user(user, metadata_override=signup_metadata)
+        except Exception:
+            pass
 
     return response
 
@@ -93,6 +115,12 @@ def sign_in(email: str, password: str):
         raise ValueError("セッションを取得できませんでした。メール認証設定を確認してください。")
 
     _save_session(session)
+    user = getattr(response, "user", None)
+    if user is not None:
+        try:
+            bootstrap_user_account_from_auth_user(user)
+        except Exception:
+            pass
     return response
 
 
@@ -108,49 +136,128 @@ def sign_out() -> None:
         clear_auth_state()
 
 
-def render_auth_forms(key_prefix: str = "auth") -> None:
-    login_tab, signup_tab = st.tabs(["ログイン", "新規登録"])
+def render_login_form(key_prefix: str = "auth") -> None:
+    with st.form(f"{key_prefix}_login_form", clear_on_submit=False):
+        login_email = st.text_input("メールアドレス", key=f"{key_prefix}_login_email")
+        login_password = st.text_input("パスワード", type="password", key=f"{key_prefix}_login_password")
+        login_submitted = st.form_submit_button("ログイン", use_container_width=True)
 
-    with login_tab:
-        with st.form(f"{key_prefix}_login_form", clear_on_submit=False):
-            login_email = st.text_input("メールアドレス", key=f"{key_prefix}_login_email")
-            login_password = st.text_input("パスワード", type="password", key=f"{key_prefix}_login_password")
-            login_submitted = st.form_submit_button("ログイン", use_container_width=True)
+    if login_submitted:
+        if not login_email.strip() or not login_password:
+            st.error("メールアドレスとパスワードを入力してください。")
+        else:
+            try:
+                sign_in(login_email.strip(), login_password)
+                st.success("ログインしました。")
+                st.rerun()
+            except Exception as e:
+                st.error(f"ログインに失敗しました: {e}")
 
-        if login_submitted:
-            if not login_email.strip() or not login_password:
-                st.error("メールアドレスとパスワードを入力してください。")
-            else:
-                try:
-                    sign_in(login_email.strip(), login_password)
-                    st.success("ログインしました。")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"ログインに失敗しました: {e}")
 
-    with signup_tab:
-        with st.form(f"{key_prefix}_signup_form", clear_on_submit=False):
+def render_signup_form(key_prefix: str = "signup") -> None:
+    currency_options = load_available_currency_codes()
+    default_index = currency_options.index(DEFAULT_BASE_CURRENCY) if DEFAULT_BASE_CURRENCY in currency_options else 0
+
+    with st.form(f"{key_prefix}_signup_form", clear_on_submit=False):
+        st.subheader("新規登録")
+        st.caption("プロフィール、基準通貨、既定の決済通貨を登録します。")
+
+        col1, col2 = st.columns(2)
+        with col1:
             signup_email = st.text_input("メールアドレス", key=f"{key_prefix}_signup_email")
+            first_name = st.text_input("名", key=f"{key_prefix}_first_name")
+            display_name = st.text_input("表示名", key=f"{key_prefix}_display_name")
+            nationality_country_code = st.text_input(
+                "国籍コード",
+                key=f"{key_prefix}_nationality_country_code",
+                placeholder="例: JP",
+            )
+        with col2:
             signup_password = st.text_input("パスワード", type="password", key=f"{key_prefix}_signup_password")
-            signup_submitted = st.form_submit_button("新規登録", use_container_width=True)
+            last_name = st.text_input("姓", key=f"{key_prefix}_last_name")
+            current_country_code = st.text_input(
+                "現在滞在国コード",
+                key=f"{key_prefix}_current_country_code",
+                placeholder="例: VN",
+            )
+            base_currency_code = st.selectbox(
+                "基準通貨",
+                options=currency_options,
+                index=default_index,
+                key=f"{key_prefix}_base_currency_code",
+            )
 
-        if signup_submitted:
-            if not signup_email.strip() or not signup_password:
-                st.error("メールアドレスとパスワードを入力してください。")
-            elif len(signup_password) < 6:
-                st.error("パスワードは6文字以上を推奨します。")
-            else:
-                try:
-                    result = sign_up(signup_email.strip(), signup_password)
-                    if getattr(result, "session", None):
-                        st.success("アカウントを作成し、そのままログインしました。")
-                        st.rerun()
-                    else:
-                        st.success(
-                            "アカウントを作成しました。確認メールを送っている場合は、メール認証後にログインしてください。"
-                        )
-                except Exception as e:
-                    st.error(f"新規登録に失敗しました: {e}")
+        enabled_currency_codes = st.multiselect(
+            "利用通貨",
+            options=currency_options,
+            default=[DEFAULT_PAYMENT_CURRENCY] if DEFAULT_PAYMENT_CURRENCY in currency_options else currency_options[:1],
+            key=f"{key_prefix}_enabled_currency_codes",
+        )
+        default_currency_candidates, initial_default_currency = normalize_currency_selection(
+            enabled_currency_codes,
+            DEFAULT_PAYMENT_CURRENCY,
+            available_currency_codes=currency_options,
+        )
+        default_currency_code = st.selectbox(
+            "既定の決済通貨",
+            options=currency_options,
+            index=currency_options.index(initial_default_currency) if initial_default_currency in currency_options else 0,
+            key=f"{key_prefix}_default_currency_code",
+        )
+
+        signup_submitted = st.form_submit_button("新規登録", use_container_width=True)
+
+    if signup_submitted:
+        if not signup_email.strip() or not signup_password:
+            st.error("メールアドレスとパスワードを入力してください。")
+        elif len(signup_password) < 6:
+            st.error("パスワードは6文字以上を推奨します。")
+        elif not display_name.strip():
+            st.error("表示名を入力してください。")
+        else:
+            try:
+                enabled_currency_codes, default_currency_code = normalize_currency_selection(
+                    enabled_currency_codes,
+                    default_currency_code,
+                    available_currency_codes=currency_options,
+                )
+                signup_metadata = build_signup_metadata(
+                    first_name=first_name,
+                    last_name=last_name,
+                    display_name=display_name,
+                    nationality_country_code=nationality_country_code,
+                    current_country_code=current_country_code,
+                    base_currency_code=base_currency_code,
+                    enabled_currency_codes=enabled_currency_codes,
+                    default_currency_code=default_currency_code,
+                )
+                result = sign_up(
+                    signup_email.strip(),
+                    signup_password,
+                    signup_metadata=signup_metadata,
+                )
+                if getattr(result, "session", None):
+                    st.success("アカウントを作成し、そのままログインしました。")
+                    st.rerun()
+                else:
+                    st.success(
+                        "アカウントを作成しました。確認メールを送っている場合は、メール認証後にログインしてください。"
+                    )
+            except Exception as e:
+                st.error(f"新規登録に失敗しました: {e}")
+
+
+def render_auth_forms(key_prefix: str = "auth", allow_signup: bool = True) -> None:
+    if allow_signup:
+        login_tab, signup_tab = st.tabs(["ログイン", "新規登録"])
+        with login_tab:
+            render_login_form(key_prefix=f"{key_prefix}_login")
+        with signup_tab:
+            render_signup_form(key_prefix=f"{key_prefix}_signup")
+        return
+
+    render_login_form(key_prefix=f"{key_prefix}_login")
+    st.caption("新規登録はメイン画面の登録フォームから行ってください。")
 
 
 def get_current_user() -> Optional[Any]:
