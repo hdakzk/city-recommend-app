@@ -4,9 +4,8 @@ from utils.auth import (
     get_current_user,
     init_auth_state,
     is_logged_in,
-    sign_in,
     sign_out,
-    sign_up,
+    render_auth_forms,
     sync_auth_cookie,
 )
 
@@ -55,48 +54,7 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"ログアウトに失敗しました: {e}")
     else:
-        login_tab, signup_tab = st.tabs(["ログイン", "新規登録"])
-
-        with login_tab:
-            with st.form("login_form", clear_on_submit=False):
-                login_email = st.text_input("メールアドレス", key="login_email")
-                login_password = st.text_input("パスワード", type="password", key="login_password")
-                login_submitted = st.form_submit_button("ログイン", use_container_width=True)
-
-            if login_submitted:
-                if not login_email.strip() or not login_password:
-                    st.error("メールアドレスとパスワードを入力してください。")
-                else:
-                    try:
-                        sign_in(login_email.strip(), login_password)
-                        st.success("ログインしました。")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"ログインに失敗しました: {e}")
-
-        with signup_tab:
-            with st.form("signup_form", clear_on_submit=False):
-                signup_email = st.text_input("メールアドレス", key="signup_email")
-                signup_password = st.text_input("パスワード", type="password", key="signup_password")
-                signup_submitted = st.form_submit_button("新規登録", use_container_width=True)
-
-            if signup_submitted:
-                if not signup_email.strip() or not signup_password:
-                    st.error("メールアドレスとパスワードを入力してください。")
-                elif len(signup_password) < 6:
-                    st.error("パスワードは6文字以上を推奨します。")
-                else:
-                    try:
-                        result = sign_up(signup_email.strip(), signup_password)
-                        if getattr(result, "session", None):
-                            st.success("アカウントを作成し、そのままログインしました。")
-                            st.rerun()
-                        else:
-                            st.success(
-                                "アカウントを作成しました。確認メールを送っている場合は、メール認証後にログインしてください。"
-                            )
-                    except Exception as e:
-                        st.error(f"新規登録に失敗しました: {e}")
+        render_auth_forms(key_prefix="sidebar_auth")
 
 # city_detail.py は一覧からの内部遷移専用なので、メニューには含めない。
 expense_register_page = st.Page(

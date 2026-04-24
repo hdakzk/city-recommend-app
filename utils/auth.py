@@ -1,21 +1,17 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Optional
 from urllib.parse import quote, unquote
 
 import streamlit as st
-from streamlit_cookies_manager import EncryptedCookieManager
+from streamlit.components.v1 import html as components_html
 
 from utils.supabase_client import create_public_supabase_client, get_supabase_client
 
 
 AUTH_COOKIE_NAME = "city_recommend_auth"
 AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
-AUTH_COOKIE_PREFIX = "city-recommend-app/"
-AUTH_COOKIE_PASSWORD_SECRET_KEY = "COOKIE_PASSWORD"
-AUTH_COOKIE_MANAGER_STATE_KEY = "_auth_cookie_manager"
 
 
 def init_auth_state() -> None:
@@ -32,11 +28,7 @@ def init_auth_state() -> None:
     if st.session_state.get("sb_skip_cookie_restore") or is_logged_in():
         return
 
-    cookies = _get_cookie_manager()
-    if not cookies.ready():
-        st.stop()
-
-    cookie_payload = _load_auth_cookie_payload(cookies.get(AUTH_COOKIE_NAME))
+    cookie_payload = _load_auth_cookie_payload(st.context.cookies.get(AUTH_COOKIE_NAME))
     if not cookie_payload:
         return
 
@@ -116,6 +108,51 @@ def sign_out() -> None:
         clear_auth_state()
 
 
+def render_auth_forms(key_prefix: str = "auth") -> None:
+    login_tab, signup_tab = st.tabs(["ログイン", "新規登録"])
+
+    with login_tab:
+        with st.form(f"{key_prefix}_login_form", clear_on_submit=False):
+            login_email = st.text_input("メールアドレス", key=f"{key_prefix}_login_email")
+            login_password = st.text_input("パスワード", type="password", key=f"{key_prefix}_login_password")
+            login_submitted = st.form_submit_button("ログイン", use_container_width=True)
+
+        if login_submitted:
+            if not login_email.strip() or not login_password:
+                st.error("メールアドレスとパスワードを入力してください。")
+            else:
+                try:
+                    sign_in(login_email.strip(), login_password)
+                    st.success("ログインしました。")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"ログインに失敗しました: {e}")
+
+    with signup_tab:
+        with st.form(f"{key_prefix}_signup_form", clear_on_submit=False):
+            signup_email = st.text_input("メールアドレス", key=f"{key_prefix}_signup_email")
+            signup_password = st.text_input("パスワード", type="password", key=f"{key_prefix}_signup_password")
+            signup_submitted = st.form_submit_button("新規登録", use_container_width=True)
+
+        if signup_submitted:
+            if not signup_email.strip() or not signup_password:
+                st.error("メールアドレスとパスワードを入力してください。")
+            elif len(signup_password) < 6:
+                st.error("パスワードは6文字以上を推奨します。")
+            else:
+                try:
+                    result = sign_up(signup_email.strip(), signup_password)
+                    if getattr(result, "session", None):
+                        st.success("アカウントを作成し、そのままログインしました。")
+                        st.rerun()
+                    else:
+                        st.success(
+                            "アカウントを作成しました。確認メールを送っている場合は、メール認証後にログインしてください。"
+                        )
+                except Exception as e:
+                    st.error(f"新規登録に失敗しました: {e}")
+
+
 def get_current_user() -> Optional[Any]:
     if not is_logged_in():
         return None
@@ -131,7 +168,7 @@ def get_current_user() -> Optional[Any]:
 
         return user
     except Exception:
-        # Treat transient auth API failures differently from confirmed logout.
+        clear_auth_state()
         return None
 
 
@@ -144,56 +181,24 @@ def require_authenticated_user() -> Any:
 
 
 def sync_auth_cookie() -> None:
-    cookies = _get_cookie_manager()
-    if not cookies.ready():
-        return
-
-    changed = False
+    cookie_value = ""
+    max_age_seconds = 0
 
     if is_logged_in():
         cookie_value = _dump_auth_cookie_payload(
             st.session_state.get("sb_access_token"),
             st.session_state.get("sb_refresh_token"),
         )
-        if cookies.get(AUTH_COOKIE_NAME) != cookie_value:
-            cookies[AUTH_COOKIE_NAME] = cookie_value
-            changed = True
-    else:
-        if cookies.get(AUTH_COOKIE_NAME):
-            del cookies[AUTH_COOKIE_NAME]
-            changed = True
+        max_age_seconds = AUTH_COOKIE_MAX_AGE_SECONDS if cookie_value else 0
 
-    if changed:
-        cookies.save()
-
-
-def _get_cookie_manager() -> EncryptedCookieManager:
-    cookie_manager = st.session_state.get(AUTH_COOKIE_MANAGER_STATE_KEY)
-    if cookie_manager is None:
-        cookie_manager = EncryptedCookieManager(
-            prefix=AUTH_COOKIE_PREFIX,
-            password=_get_cookie_password(),
-        )
-        st.session_state[AUTH_COOKIE_MANAGER_STATE_KEY] = cookie_manager
-    return cookie_manager
-
-
-def _get_cookie_password() -> str:
-    configured_password = str(st.secrets.get(AUTH_COOKIE_PASSWORD_SECRET_KEY, "")).strip()
-    if configured_password:
-        return configured_password
-
-    env_password = str(os.environ.get(AUTH_COOKIE_PASSWORD_SECRET_KEY, "")).strip()
-    if env_password:
-        return env_password
-
-    supabase_password = str(st.secrets.get("supabase", {}).get("anon_key", "")).strip()
-    if supabase_password:
-        return supabase_password
-
-    raise ValueError(
-        f"{AUTH_COOKIE_PASSWORD_SECRET_KEY} が設定されていません。"
-        " 本番環境の secrets に認証 Cookie 用のパスワードを追加してください。"
+    secure_attr_script = "window.location.protocol === 'https:' ? '; Secure' : ''"
+    components_html(
+        f"""
+        <script>
+        document.cookie = "{AUTH_COOKIE_NAME}={cookie_value}; Max-Age={max_age_seconds}; Path=/; SameSite=Lax" + ({secure_attr_script});
+        </script>
+        """,
+        height=0,
     )
 
 
