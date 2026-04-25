@@ -197,7 +197,7 @@ class ExpenseManageSupportTest(unittest.TestCase):
         )
 
         self.assertEqual(expense_id, 10)
-        self.assertEqual(payload["payment_date"], "2026/04/03")
+        self.assertEqual(payload["payment_date"], "2026-04-03")
         self.assertEqual(payload["currency_code"], "USD")
         self.assertEqual(payload["amount_base"], 90)
         self.assertEqual(payload["payment_method"], "現金")
@@ -361,7 +361,7 @@ class ExpenseManageSupportTest(unittest.TestCase):
                 (
                     10,
                     {
-                        "payment_date": "2026/04/05",
+                        "payment_date": "2026-04-05",
                         "currency_code": "EUR",
                         "payment_method": "クレジットカード",
                         "description": "交通費",
@@ -579,7 +579,8 @@ class ExpenseManageSupportTest(unittest.TestCase):
             records,
             [
                 {
-                    "payment_date": "2026/03/15",
+                    "payment_date": "2026-03-15",
+                    "data_source": "Wechat",
                     "currency_code": "CNY",
                     "amount": 3.4,
                     "exchange_rate": 20.5,
@@ -613,6 +614,7 @@ class ExpenseManageSupportTest(unittest.TestCase):
 
         records = build_wechat_expense_records(file_content, "user-1")
 
+        self.assertEqual(records[0]["data_source"], "Wechat")
         self.assertEqual(records[0]["exchange_rate"], 21.0)
         self.assertEqual(records[0]["amount_base"], 63)
 
@@ -672,6 +674,7 @@ class ExpenseManageSupportTest(unittest.TestCase):
             receipt_storage_path="user-1/2026/04/20260405_token.jpg",
         )
 
+        self.assertEqual(record["payment_date"], "2026-04-05")
         self.assertEqual(
             record["receipt_storage_path"],
             "user-1/2026/04/20260405_token.jpg",

@@ -145,7 +145,7 @@ def build_expense_update_payload(
     normalized_tax_category_id = _coerce_positive_int(tax_category_id, "税務カテゴリ")
 
     return normalized_expense_id, {
-        "payment_date": payment_date_value.strftime("%Y/%m/%d"),
+        "payment_date": payment_date_value.isoformat(),
         "currency_code": normalized_currency_code,
         "amount": float(amount),
         "exchange_rate": float(exchange_rate),
@@ -194,7 +194,7 @@ def build_bulk_expense_update_plan(
         if pd.isna(edited_payment_date):
             raise ValueError(f"ID {normalized_expense_id} の支払日が不正です。")
         if pd.isna(original_payment_date) or edited_payment_date.date() != original_payment_date.date():
-            payload["payment_date"] = edited_payment_date.strftime("%Y/%m/%d")
+            payload["payment_date"] = edited_payment_date.date().isoformat()
             preview_row["支払日(変更前)"] = (
                 original_payment_date.strftime("%Y-%m-%d") if not pd.isna(original_payment_date) else ""
             )
@@ -568,7 +568,8 @@ def build_wechat_expense_records(
 
         expense_records.append(
             {
-                "payment_date": payment_date_value.strftime("%Y/%m/%d"),
+                "payment_date": payment_date_value.isoformat(),
+                "data_source": "Wechat",
                 "currency_code": WECHAT_CURRENCY_CODE,
                 "amount": amount,
                 "exchange_rate": exchange_rate,

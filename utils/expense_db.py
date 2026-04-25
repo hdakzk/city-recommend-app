@@ -124,7 +124,7 @@ def build_expense_record(
     receipt_storage_path: str | None = None,
 ) -> Dict[str, Any]:
     record = {
-        "payment_date": payment_date_value.strftime("%Y/%m/%d"),
+        "payment_date": payment_date_value.isoformat(),
         "currency_code": currency_code,
         "amount": amount,
         "exchange_rate": exchange_rate,
