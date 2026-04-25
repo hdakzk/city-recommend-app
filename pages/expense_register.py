@@ -71,6 +71,20 @@ def calculate_amount_base(amount: float, exchange_rate: float) -> int:
     return int(round(amount * exchange_rate))
 
 
+def build_auth_diagnostics(user_id: str) -> dict[str, object]:
+    normalized_user_id = str(user_id or "").strip()
+    access_token = st.session_state.get("sb_access_token")
+    refresh_token = st.session_state.get("sb_refresh_token")
+
+    return {
+        "app_user_id": normalized_user_id,
+        "access_token_exists": bool(access_token),
+        "refresh_token_exists": bool(refresh_token),
+        "session_loaded": bool(st.session_state.get("sb_session_loaded")),
+        "page_auth_check_passed": bool(normalized_user_id),
+    }
+
+
 # =========================
 # UI
 # =========================
@@ -220,6 +234,18 @@ def main() -> None:
     st.caption(
         f"旅行・滞在中の支出を登録します。決済通貨は {payment_currency_code}、基準通貨は {base_currency_code} です。"
     )
+
+    with st.expander("認証診断", expanded=False):
+        auth_diagnostics = build_auth_diagnostics(user_id)
+        st.write("app user_id:", auth_diagnostics["app_user_id"])
+        st.write("sb_access_token exists:", auth_diagnostics["access_token_exists"])
+        st.write("sb_refresh_token exists:", auth_diagnostics["refresh_token_exists"])
+        st.write("sb_session_loaded:", auth_diagnostics["session_loaded"])
+        st.write("page auth check passed:", auth_diagnostics["page_auth_check_passed"])
+        st.caption(
+            "このページが表示されている時点で require_authenticated_user() は通過済みです。"
+            " app user_id を Supabase Authentication > Users の ID と照合してください。"
+        )
 
     try:
         expenses_df, usage_df, tax_df = load_expense_master_data(user_id)

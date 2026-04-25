@@ -121,6 +121,7 @@ def build_expense_update_payload(
     *,
     expense_id: Any,
     payment_date_value: date,
+    currency_code: str,
     amount: float,
     exchange_rate: float,
     payment_method: str,
@@ -129,6 +130,10 @@ def build_expense_update_payload(
     tax_category_id: Any,
 ) -> tuple[int, dict[str, Any]]:
     normalized_expense_id = _coerce_positive_int(expense_id, "更新対象ID")
+    normalized_currency_code = str(currency_code or "").strip().upper()
+
+    if not normalized_currency_code:
+        raise ValueError("通貨を入力してください。")
 
     if amount <= 0:
         raise ValueError("金額は 0 より大きい値を入力してください。")
@@ -141,6 +146,7 @@ def build_expense_update_payload(
 
     return normalized_expense_id, {
         "payment_date": payment_date_value.strftime("%Y/%m/%d"),
+        "currency_code": normalized_currency_code,
         "amount": float(amount),
         "exchange_rate": float(exchange_rate),
         "amount_base": int(round(float(amount) * float(exchange_rate))),
@@ -194,6 +200,15 @@ def build_bulk_expense_update_plan(
             )
             preview_row["支払日(変更後)"] = edited_payment_date.strftime("%Y-%m-%d")
 
+        edited_currency_code = str(edited_row.get("通貨") or "").strip().upper()
+        if not edited_currency_code:
+            raise ValueError(f"ID {normalized_expense_id} の通貨を入力してください。")
+        original_currency_code = str(original_row.get("currency_code") or "").strip().upper()
+        if edited_currency_code != original_currency_code:
+            payload["currency_code"] = edited_currency_code
+            preview_row["通貨(変更前)"] = original_currency_code
+            preview_row["通貨(変更後)"] = edited_currency_code
+
         edited_payment_method = str(edited_row.get("決済方法") or "").strip()
         original_payment_method = str(original_row.get("payment_method") or "").strip()
         if edited_payment_method != original_payment_method:
@@ -237,25 +252,38 @@ def build_bulk_expense_update_plan(
         edited_amount = pd.to_numeric(edited_row.get("金額"), errors="coerce")
         if pd.isna(edited_amount) or float(edited_amount) <= 0:
             raise ValueError(f"ID {normalized_expense_id} の金額は 0 より大きい値を入力してください。")
+
+        edited_exchange_rate = pd.to_numeric(edited_row.get("為替レート"), errors="coerce")
+        if pd.isna(edited_exchange_rate) or float(edited_exchange_rate) <= 0:
+            raise ValueError(f"ID {normalized_expense_id} の為替レートは 0 より大きい値を入力してください。")
+
         original_amount = pd.to_numeric(original_row.get("amount"), errors="coerce")
-        if pd.isna(original_amount) or float(edited_amount) != float(original_amount):
-            exchange_rate_value = pd.to_numeric(original_row.get("exchange_rate"), errors="coerce")
-            if pd.isna(exchange_rate_value) or float(exchange_rate_value) <= 0:
-                raise ValueError(
-                    f"ID {normalized_expense_id} の為替レートが不正なため、金額を一括変更できません。"
-                )
-
+        original_exchange_rate = pd.to_numeric(original_row.get("exchange_rate"), errors="coerce")
+        amount_changed = pd.isna(original_amount) or float(edited_amount) != float(original_amount)
+        exchange_rate_changed = pd.isna(original_exchange_rate) or float(edited_exchange_rate) != float(
+            original_exchange_rate
+        )
+        if amount_changed or exchange_rate_changed:
             original_amount_base = pd.to_numeric(original_row.get("amount_base"), errors="coerce")
-            amount_base = int(round(float(edited_amount) * float(exchange_rate_value)))
+            amount_base = int(round(float(edited_amount) * float(edited_exchange_rate)))
 
-            preview_row["金額(変更前)"] = float(original_amount) if not pd.isna(original_amount) else None
-            preview_row["金額(変更後)"] = float(edited_amount)
+            if amount_changed:
+                preview_row["金額(変更前)"] = float(original_amount) if not pd.isna(original_amount) else None
+                preview_row["金額(変更後)"] = float(edited_amount)
+                payload["amount"] = float(edited_amount)
+
+            if exchange_rate_changed:
+                preview_row["為替レート(変更前)"] = (
+                    float(original_exchange_rate) if not pd.isna(original_exchange_rate) else None
+                )
+                preview_row["為替レート(変更後)"] = float(edited_exchange_rate)
+                payload["exchange_rate"] = float(edited_exchange_rate)
+
             preview_row["円換算額(変更前)"] = (
                 int(round(float(original_amount_base))) if not pd.isna(original_amount_base) else None
             )
             preview_row["円換算額(変更後)"] = amount_base
 
-            payload["amount"] = float(edited_amount)
             payload["amount_base"] = amount_base
 
         if payload:
@@ -274,7 +302,9 @@ def build_bulk_expense_edit_frame(
     tax_options: Mapping[str, Any],
 ) -> pd.DataFrame:
     if selected_expenses_df.empty:
-        return pd.DataFrame(columns=["ID", "支払日", "決済方法", "用途カテゴリ", "税務カテゴリ", "内容", "金額"])
+        return pd.DataFrame(
+            columns=["ID", "支払日", "通貨", "決済方法", "用途カテゴリ", "税務カテゴリ", "内容", "金額", "為替レート"]
+        )
 
     editable_rows: list[dict[str, Any]] = []
     for _, row in selected_expenses_df.iterrows():
@@ -284,11 +314,13 @@ def build_bulk_expense_edit_frame(
             {
                 "ID": expense_id,
                 "支払日": payment_date_value.date() if not pd.isna(payment_date_value) else None,
+                "通貨": str(row.get("currency_code") or "").strip().upper(),
                 "決済方法": str(row.get("payment_method") or "").strip(),
                 "用途カテゴリ": find_category_label_by_id(usage_options, row.get("usage_categories_id")),
                 "税務カテゴリ": find_category_label_by_id(tax_options, row.get("tax_categories_id")),
                 "内容": str(row.get("description") or "").strip(),
                 "金額": pd.to_numeric(row.get("amount"), errors="coerce"),
+                "為替レート": pd.to_numeric(row.get("exchange_rate"), errors="coerce"),
             }
         )
 

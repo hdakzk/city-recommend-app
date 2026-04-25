@@ -187,6 +187,7 @@ class ExpenseManageSupportTest(unittest.TestCase):
         expense_id, payload = build_expense_update_payload(
             expense_id="10",
             payment_date_value=date(2026, 4, 3),
+            currency_code=" usd ",
             amount=15000,
             exchange_rate=0.006,
             payment_method=" 現金 ",
@@ -197,6 +198,7 @@ class ExpenseManageSupportTest(unittest.TestCase):
 
         self.assertEqual(expense_id, 10)
         self.assertEqual(payload["payment_date"], "2026/04/03")
+        self.assertEqual(payload["currency_code"], "USD")
         self.assertEqual(payload["amount_base"], 90)
         self.assertEqual(payload["payment_method"], "現金")
         self.assertEqual(payload["description"], "ランチ")
@@ -208,6 +210,7 @@ class ExpenseManageSupportTest(unittest.TestCase):
             build_expense_update_payload(
                 expense_id=10,
                 payment_date_value=date(2026, 4, 3),
+                currency_code="USD",
                 amount=0,
                 exchange_rate=0.006,
                 payment_method="現金",
@@ -221,11 +224,26 @@ class ExpenseManageSupportTest(unittest.TestCase):
             build_expense_update_payload(
                 expense_id=10,
                 payment_date_value=date(2026, 4, 3),
+                currency_code="USD",
                 amount=100,
                 exchange_rate=0.006,
                 payment_method="現金",
                 description="Lunch",
                 usage_category_id=None,
+                tax_category_id=3,
+            )
+
+    def test_build_expense_update_payload_rejects_blank_currency_boundary(self):
+        with self.assertRaises(ValueError):
+            build_expense_update_payload(
+                expense_id=10,
+                payment_date_value=date(2026, 4, 3),
+                currency_code=" ",
+                amount=100,
+                exchange_rate=0.006,
+                payment_method="現金",
+                description="Lunch",
+                usage_category_id=2,
                 tax_category_id=3,
             )
 
@@ -235,6 +253,7 @@ class ExpenseManageSupportTest(unittest.TestCase):
                 {
                     "id": 10,
                     "payment_date": "2026/04/01",
+                    "currency_code": "usd",
                     "amount": 100.0,
                     "exchange_rate": 20.0,
                     "amount_base": 2000,
@@ -246,6 +265,7 @@ class ExpenseManageSupportTest(unittest.TestCase):
                 {
                     "id": 20,
                     "payment_date": "2026/04/02",
+                    "currency_code": "JPY",
                     "amount": 150.0,
                     "exchange_rate": 21.0,
                     "amount_base": 3150,
@@ -265,9 +285,11 @@ class ExpenseManageSupportTest(unittest.TestCase):
 
         self.assertEqual(editable_df.loc[0, "ID"], 10)
         self.assertEqual(editable_df.loc[0, "支払日"], date(2026, 4, 1))
+        self.assertEqual(editable_df.loc[0, "通貨"], "USD")
         self.assertEqual(editable_df.loc[0, "用途カテゴリ"], "食費")
         self.assertEqual(editable_df.loc[1, "税務カテゴリ"], "非課税")
         self.assertEqual(editable_df.loc[1, "金額"], 150.0)
+        self.assertEqual(editable_df.loc[1, "為替レート"], 21.0)
 
     def test_build_bulk_expense_update_plan_builds_preview_and_payloads(self):
         original_expenses_df = pd.DataFrame(
@@ -275,6 +297,7 @@ class ExpenseManageSupportTest(unittest.TestCase):
                 {
                     "id": 10,
                     "payment_date": "2026/04/01",
+                    "currency_code": "USD",
                     "amount": 100.0,
                     "exchange_rate": 20.0,
                     "amount_base": 2000,
@@ -286,6 +309,7 @@ class ExpenseManageSupportTest(unittest.TestCase):
                 {
                     "id": 20,
                     "payment_date": "2026/04/02",
+                    "currency_code": "JPY",
                     "amount": 150.0,
                     "exchange_rate": 21.0,
                     "amount_base": 3150,
@@ -302,20 +326,24 @@ class ExpenseManageSupportTest(unittest.TestCase):
                 {
                     "ID": 10,
                     "支払日": date(2026, 4, 5),
+                    "通貨": "eur",
                     "決済方法": "クレジットカード",
                     "用途カテゴリ": "交通",
                     "税務カテゴリ": "非課税",
                     "内容": "交通費",
                     "金額": 300.0,
+                    "為替レート": 22.5,
                 },
                 {
                     "ID": 20,
                     "支払日": date(2026, 4, 2),
+                    "通貨": "JPY",
                     "決済方法": "WISE",
                     "用途カテゴリ": "交通",
                     "税務カテゴリ": "非課税",
                     "内容": "昼食",
                     "金額": 200.0,
+                    "為替レート": 21.0,
                 },
             ]
         )
@@ -334,10 +362,12 @@ class ExpenseManageSupportTest(unittest.TestCase):
                     10,
                     {
                         "payment_date": "2026/04/05",
+                        "currency_code": "EUR",
                         "payment_method": "クレジットカード",
                         "description": "交通費",
                         "amount": 300.0,
-                        "amount_base": 6000,
+                        "exchange_rate": 22.5,
+                        "amount_base": 6750,
                         "usage_categories_id": 2,
                         "tax_categories_id": 4,
                     },
@@ -351,6 +381,9 @@ class ExpenseManageSupportTest(unittest.TestCase):
                 ),
             ],
         )
+        self.assertEqual(preview_df.loc[0, "通貨(変更前)"], "USD")
+        self.assertEqual(preview_df.loc[0, "通貨(変更後)"], "EUR")
+        self.assertEqual(preview_df.loc[0, "為替レート(変更後)"], 22.5)
         self.assertEqual(preview_df.loc[0, "用途カテゴリ(変更前)"], "食費")
         self.assertEqual(preview_df.loc[0, "用途カテゴリ(変更後)"], "交通")
         self.assertEqual(preview_df.loc[0, "支払日(変更後)"], "2026-04-05")
@@ -374,6 +407,7 @@ class ExpenseManageSupportTest(unittest.TestCase):
                         {
                             "id": 10,
                             "payment_date": "2026/04/01",
+                            "currency_code": "USD",
                             "amount": 100.0,
                             "exchange_rate": 20.0,
                             "payment_method": "現金",
@@ -388,11 +422,13 @@ class ExpenseManageSupportTest(unittest.TestCase):
                         {
                             "ID": 10,
                             "支払日": date(2026, 4, 1),
+                            "通貨": "USD",
                             "決済方法": "現金",
                             "用途カテゴリ": "食費",
                             "税務カテゴリ": "課税",
                             "内容": "朝食",
                             "金額": 100.0,
+                            "為替レート": 20.0,
                         }
                     ]
                 ),
@@ -408,6 +444,7 @@ class ExpenseManageSupportTest(unittest.TestCase):
                         {
                             "id": 10,
                             "payment_date": "2026/04/01",
+                            "currency_code": "USD",
                             "amount": 100.0,
                             "exchange_rate": 20.0,
                             "payment_method": "現金",
@@ -422,11 +459,13 @@ class ExpenseManageSupportTest(unittest.TestCase):
                         {
                             "ID": 10,
                             "支払日": date(2026, 4, 1),
+                            "通貨": "USD",
                             "決済方法": "現金",
                             "用途カテゴリ": "食費",
                             "税務カテゴリ": "課税",
                             "内容": "朝食",
                             "金額": 0.0,
+                            "為替レート": 20.0,
                         }
                     ]
                 ),
@@ -442,8 +481,9 @@ class ExpenseManageSupportTest(unittest.TestCase):
                         {
                             "id": 10,
                             "payment_date": "2026/04/01",
+                            "currency_code": "USD",
                             "amount": 50.0,
-                            "exchange_rate": None,
+                            "exchange_rate": 10.0,
                             "payment_method": "現金",
                             "description": "朝食",
                             "usage_categories_id": 1,
@@ -456,11 +496,50 @@ class ExpenseManageSupportTest(unittest.TestCase):
                         {
                             "ID": 10,
                             "支払日": date(2026, 4, 1),
+                            "通貨": "USD",
                             "決済方法": "現金",
                             "用途カテゴリ": "食費",
                             "税務カテゴリ": "課税",
                             "内容": "朝食",
                             "金額": 100.0,
+                            "為替レート": 0.0,
+                        }
+                    ]
+                ),
+                {"食費": 1},
+                {"課税": 3},
+            )
+
+    def test_build_bulk_expense_update_plan_rejects_blank_currency_boundary(self):
+        with self.assertRaises(ValueError):
+            build_bulk_expense_update_plan(
+                pd.DataFrame(
+                    [
+                        {
+                            "id": 10,
+                            "payment_date": "2026/04/01",
+                            "currency_code": "USD",
+                            "amount": 50.0,
+                            "exchange_rate": 10.0,
+                            "payment_method": "現金",
+                            "description": "朝食",
+                            "usage_categories_id": 1,
+                            "tax_categories_id": 3,
+                        }
+                    ]
+                ),
+                pd.DataFrame(
+                    [
+                        {
+                            "ID": 10,
+                            "支払日": date(2026, 4, 1),
+                            "通貨": " ",
+                            "決済方法": "現金",
+                            "用途カテゴリ": "食費",
+                            "税務カテゴリ": "課税",
+                            "内容": "朝食",
+                            "金額": 50.0,
+                            "為替レート": 10.0,
                         }
                     ]
                 ),

@@ -537,6 +537,7 @@ def render_expense_edit_dialog(
     st.caption(f"ID: {expense_id}")
 
     payment_date_value = to_editable_payment_date(current_row.get("payment_date"))
+    currency_code_value = str(current_row.get("currency_code") or "").strip().upper()
     amount_value = to_editable_float(current_row.get("amount"))
     exchange_rate_value = to_editable_float(current_row.get("exchange_rate"))
     payment_method_options = ["現金", "クレジットカード", "電子決済", "WISE"]
@@ -554,13 +555,21 @@ def render_expense_edit_dialog(
     tax_index = tax_labels.index(tax_label) if tax_label in tax_labels else 0
 
     with st.form(f"expense_edit_form_{expense_id}"):
-        col_date, col_amount = st.columns(2)
+        col_date, col_currency = st.columns(2)
         with col_date:
             edited_payment_date = st.date_input(
                 "支払日",
                 value=payment_date_value,
                 format="YYYY/MM/DD",
             )
+        with col_currency:
+            edited_currency_code = st.text_input(
+                "通貨",
+                value=currency_code_value,
+                max_chars=10,
+            )
+
+        col_amount, col_rate = st.columns(2)
         with col_amount:
             edited_amount = st.number_input(
                 "金額",
@@ -569,8 +578,6 @@ def render_expense_edit_dialog(
                 format="%.0f",
                 value=amount_value,
             )
-
-        col_rate, col_method = st.columns(2)
         with col_rate:
             edited_exchange_rate = st.number_input(
                 "為替レート",
@@ -579,6 +586,8 @@ def render_expense_edit_dialog(
                 format="%.6f",
                 value=exchange_rate_value,
             )
+
+        col_method, _ = st.columns(2)
         with col_method:
             edited_payment_method = st.selectbox(
                 "決済方法",
@@ -623,6 +632,7 @@ def render_expense_edit_dialog(
         normalized_expense_id, payload = build_expense_update_payload(
             expense_id=expense_id,
             payment_date_value=edited_payment_date,
+            currency_code=edited_currency_code,
             amount=edited_amount,
             exchange_rate=edited_exchange_rate,
             payment_method=edited_payment_method,
@@ -664,11 +674,13 @@ def render_bulk_expense_edit_dialog(
             column_config={
                 "ID": st.column_config.NumberColumn("ID", format="%d"),
                 "支払日": st.column_config.DateColumn("支払日", format="YYYY-MM-DD"),
+                "通貨": st.column_config.TextColumn("通貨", required=True, max_chars=10),
                 "決済方法": st.column_config.SelectboxColumn("決済方法", options=payment_method_options, required=True),
                 "用途カテゴリ": st.column_config.SelectboxColumn("用途カテゴリ", options=usage_labels, required=True),
                 "税務カテゴリ": st.column_config.SelectboxColumn("税務カテゴリ", options=tax_labels, required=True),
                 "内容": st.column_config.TextColumn("内容"),
                 "金額": st.column_config.NumberColumn("金額", min_value=0.0, step=1.0, format="%.0f"),
+                "為替レート": st.column_config.NumberColumn("為替レート", min_value=0.0, step=0.001, format="%.6f"),
             },
             key="bulk_expense_editor",
         )
