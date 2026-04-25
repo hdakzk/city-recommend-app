@@ -61,6 +61,30 @@ def get_selected_expense_id(table_df: pd.DataFrame, selected_rows: Sequence[int]
         return None
 
 
+def get_selected_expense_ids(table_df: pd.DataFrame, selected_rows: Sequence[int]) -> list[int]:
+    if table_df.empty or "ID" not in table_df.columns or not selected_rows:
+        return []
+
+    selected_ids: list[int] = []
+    for selected_row_index in selected_rows:
+        if selected_row_index < 0 or selected_row_index >= len(table_df):
+            continue
+
+        selected_id = table_df.iloc[selected_row_index].get("ID")
+        if pd.isna(selected_id):
+            continue
+
+        try:
+            normalized_id = int(float(selected_id))
+        except (TypeError, ValueError):
+            continue
+
+        if normalized_id not in selected_ids:
+            selected_ids.append(normalized_id)
+
+    return selected_ids
+
+
 def get_expense_row_by_id(expenses_df: pd.DataFrame, expense_id: Any) -> dict[str, Any] | None:
     if expenses_df.empty or "id" not in expenses_df.columns:
         return None
@@ -125,6 +149,150 @@ def build_expense_update_payload(
         "usage_categories_id": normalized_usage_category_id,
         "tax_categories_id": normalized_tax_category_id,
     }
+
+
+def build_bulk_expense_update_plan(
+    original_expenses_df: pd.DataFrame,
+    edited_expenses_df: pd.DataFrame,
+    usage_options: Mapping[str, Any],
+    tax_options: Mapping[str, Any],
+) -> tuple[list[tuple[int, dict[str, Any]]], pd.DataFrame]:
+    if original_expenses_df.empty:
+        raise ValueError("更新対象の経費データを1件以上選択してください。")
+
+    if edited_expenses_df.empty:
+        raise ValueError("編集対象の経費データがありません。")
+
+    original_rows: dict[int, dict[str, Any]] = {}
+    for _, row in original_expenses_df.iterrows():
+        expense_id = _coerce_positive_int(row.get("id"), "更新対象ID")
+        original_rows[expense_id] = row.to_dict()
+
+    usage_labels = set(usage_options.keys())
+    tax_labels = set(tax_options.keys())
+
+    update_plan: list[tuple[int, dict[str, Any]]] = []
+    preview_rows: list[dict[str, Any]] = []
+
+    for _, edited_row in edited_expenses_df.iterrows():
+        normalized_expense_id = _coerce_positive_int(edited_row.get("ID"), "更新対象ID")
+        original_row = original_rows.get(normalized_expense_id)
+        if original_row is None:
+            raise ValueError(f"ID {normalized_expense_id} の元データが見つかりません。")
+
+        payload: dict[str, Any] = {}
+        preview_row: dict[str, Any] = {"ID": normalized_expense_id}
+
+        original_payment_date = pd.to_datetime(original_row.get("payment_date"), errors="coerce")
+        edited_payment_date = pd.to_datetime(edited_row.get("支払日"), errors="coerce")
+        if pd.isna(edited_payment_date):
+            raise ValueError(f"ID {normalized_expense_id} の支払日が不正です。")
+        if pd.isna(original_payment_date) or edited_payment_date.date() != original_payment_date.date():
+            payload["payment_date"] = edited_payment_date.strftime("%Y/%m/%d")
+            preview_row["支払日(変更前)"] = (
+                original_payment_date.strftime("%Y-%m-%d") if not pd.isna(original_payment_date) else ""
+            )
+            preview_row["支払日(変更後)"] = edited_payment_date.strftime("%Y-%m-%d")
+
+        edited_payment_method = str(edited_row.get("決済方法") or "").strip()
+        original_payment_method = str(original_row.get("payment_method") or "").strip()
+        if edited_payment_method != original_payment_method:
+            payload["payment_method"] = edited_payment_method
+            preview_row["決済方法(変更前)"] = original_payment_method
+            preview_row["決済方法(変更後)"] = edited_payment_method
+
+        edited_description = str(edited_row.get("内容") or "").strip()
+        original_description = str(original_row.get("description") or "").strip()
+        if edited_description != original_description:
+            payload["description"] = edited_description
+            preview_row["内容(変更前)"] = original_description
+            preview_row["内容(変更後)"] = edited_description
+
+        edited_usage_label = str(edited_row.get("用途カテゴリ") or "").strip()
+        if edited_usage_label not in usage_labels:
+            raise ValueError(f"ID {normalized_expense_id} の用途カテゴリが不正です。")
+        edited_usage_id = _coerce_positive_int(usage_options[edited_usage_label], "用途カテゴリ")
+        original_usage_id = _to_positive_int_or_none(original_row.get("usage_categories_id"))
+        if edited_usage_id != original_usage_id:
+            payload["usage_categories_id"] = edited_usage_id
+            preview_row["用途カテゴリ(変更前)"] = find_category_label_by_id(
+                usage_options,
+                original_row.get("usage_categories_id"),
+            )
+            preview_row["用途カテゴリ(変更後)"] = edited_usage_label
+
+        edited_tax_label = str(edited_row.get("税務カテゴリ") or "").strip()
+        if edited_tax_label not in tax_labels:
+            raise ValueError(f"ID {normalized_expense_id} の税務カテゴリが不正です。")
+        edited_tax_id = _coerce_positive_int(tax_options[edited_tax_label], "税務カテゴリ")
+        original_tax_id = _to_positive_int_or_none(original_row.get("tax_categories_id"))
+        if edited_tax_id != original_tax_id:
+            payload["tax_categories_id"] = edited_tax_id
+            preview_row["税務カテゴリ(変更前)"] = find_category_label_by_id(
+                tax_options,
+                original_row.get("tax_categories_id"),
+            )
+            preview_row["税務カテゴリ(変更後)"] = edited_tax_label
+
+        edited_amount = pd.to_numeric(edited_row.get("金額"), errors="coerce")
+        if pd.isna(edited_amount) or float(edited_amount) <= 0:
+            raise ValueError(f"ID {normalized_expense_id} の金額は 0 より大きい値を入力してください。")
+        original_amount = pd.to_numeric(original_row.get("amount"), errors="coerce")
+        if pd.isna(original_amount) or float(edited_amount) != float(original_amount):
+            exchange_rate_value = pd.to_numeric(original_row.get("exchange_rate"), errors="coerce")
+            if pd.isna(exchange_rate_value) or float(exchange_rate_value) <= 0:
+                raise ValueError(
+                    f"ID {normalized_expense_id} の為替レートが不正なため、金額を一括変更できません。"
+                )
+
+            original_amount_base = pd.to_numeric(original_row.get("amount_base"), errors="coerce")
+            amount_base = int(round(float(edited_amount) * float(exchange_rate_value)))
+
+            preview_row["金額(変更前)"] = float(original_amount) if not pd.isna(original_amount) else None
+            preview_row["金額(変更後)"] = float(edited_amount)
+            preview_row["円換算額(変更前)"] = (
+                int(round(float(original_amount_base))) if not pd.isna(original_amount_base) else None
+            )
+            preview_row["円換算額(変更後)"] = amount_base
+
+            payload["amount"] = float(edited_amount)
+            payload["amount_base"] = amount_base
+
+        if payload:
+            update_plan.append((normalized_expense_id, payload))
+            preview_rows.append(preview_row)
+
+    if not update_plan:
+        raise ValueError("変更内容がありません。")
+
+    return update_plan, pd.DataFrame(preview_rows)
+
+
+def build_bulk_expense_edit_frame(
+    selected_expenses_df: pd.DataFrame,
+    usage_options: Mapping[str, Any],
+    tax_options: Mapping[str, Any],
+) -> pd.DataFrame:
+    if selected_expenses_df.empty:
+        return pd.DataFrame(columns=["ID", "支払日", "決済方法", "用途カテゴリ", "税務カテゴリ", "内容", "金額"])
+
+    editable_rows: list[dict[str, Any]] = []
+    for _, row in selected_expenses_df.iterrows():
+        expense_id = _coerce_positive_int(row.get("id"), "更新対象ID")
+        payment_date_value = pd.to_datetime(row.get("payment_date"), errors="coerce")
+        editable_rows.append(
+            {
+                "ID": expense_id,
+                "支払日": payment_date_value.date() if not pd.isna(payment_date_value) else None,
+                "決済方法": str(row.get("payment_method") or "").strip(),
+                "用途カテゴリ": find_category_label_by_id(usage_options, row.get("usage_categories_id")),
+                "税務カテゴリ": find_category_label_by_id(tax_options, row.get("tax_categories_id")),
+                "内容": str(row.get("description") or "").strip(),
+                "金額": pd.to_numeric(row.get("amount"), errors="coerce"),
+            }
+        )
+
+    return pd.DataFrame(editable_rows)
 
 
 def _column_letters_to_index(cell_ref: str) -> int:

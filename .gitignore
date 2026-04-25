@@ -5,3 +5,6 @@ __pycache__/
 
 # secretsだけ除外
 .streamlit/secrets.toml
+.venv/
+.codex/
+*.xlsx

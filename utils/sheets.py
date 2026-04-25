@@ -4,21 +4,30 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from collections import OrderedDict
+import io
 import os
 import re
 import time
 
+import gspread
 import pandas as pd
 import requests
 import streamlit as st
+from google.oauth2.service_account import Credentials
+
 
 SHEET_ID = "1L4qsWHhucIORTjSC9MF5YtuOYk0NMQKFiI_Kzt1anWE"
 PAYMENT_METHODS = ["現金", "クレジットカード", "電子決済", "WISE"]
 FRANKFURTER_BASE_URL = "https://api.frankfurter.dev/v2"
 JST = "Asia/Tokyo"
+YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
 
 
 class SheetsWriteError(RuntimeError):
+    pass
+
+
+class YouTubeApiError(RuntimeError):
     pass
 
 
@@ -51,9 +60,34 @@ def _normalize_numeric_column(df: pd.DataFrame, col: str) -> pd.DataFrame:
     return df
 
 
-def load_public_sheet(sheet_name: str) -> pd.DataFrame:
+def _now_string() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _debug_log(debug: List[str], message: str) -> None:
+    timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    line = f"[{timestamp}] {message}"
+    print(line)
+    debug.append(line)
+
+
+def load_public_sheet(sheet_name: str, timeout: int = 20, retries: int = 3) -> pd.DataFrame:
     url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
-    return pd.read_csv(url)
+
+    last_error = None
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, timeout=timeout)
+            response.raise_for_status()
+            return pd.read_csv(io.StringIO(response.text))
+        except Exception as e:
+            last_error = e
+            if attempt < retries - 1:
+                time.sleep(1.5 * (attempt + 1))
+            else:
+                raise RuntimeError(f"{sheet_name} シートの取得に失敗しました: {e}") from e
+
+    raise RuntimeError(f"{sheet_name} シートの取得に失敗しました: {last_error}")
 
 
 def load_public_sheet_safe(sheet_name: str) -> pd.DataFrame:
@@ -63,7 +97,7 @@ def load_public_sheet_safe(sheet_name: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=300)
+@st.cache_resource(ttl=300, show_spinner=False)
 def load_data() -> AppData:
     countries = load_public_sheet("Countries")
     cities = load_public_sheet("Cities")
@@ -72,8 +106,8 @@ def load_data() -> AppData:
     usage_categories = load_public_sheet("Usage_categories")
     tax_categories = load_public_sheet("Tax_categories")
     city_airports = load_public_sheet("City_airports")
-    airports = load_public_sheet("Airport")
-    youtube_videos = load_public_sheet("Youtube_videos")
+    airports = load_public_sheet_safe("Airport")
+    youtube_videos = load_public_sheet_safe("Youtube_videos")
     queries_content = load_public_sheet_safe("Queries_content")
     query_hits = load_public_sheet_safe("Query_hits")
 
@@ -90,27 +124,28 @@ def load_data() -> AppData:
         queries_content,
         query_hits,
     ]:
-        df.columns = df.columns.str.strip()
+        if df is not None and not df.empty:
+            df.columns = df.columns.str.strip()
 
     countries = _normalize_text_columns(
         countries,
-        ["country", "country_en", "area1", "area2", "currency_code", "religion"]
+        ["country", "country_en", "area1", "area2", "currency_code", "religion", "language"],
     )
     cities = _normalize_text_columns(
         cities,
-        ["city_jp", "city_en", "timezone_offset"]
+        ["city_jp", "city_en", "timezone_offset", "city_aliases_match"],
     )
     climate = _normalize_text_columns(climate, [])
     expenses = _normalize_text_columns(
         expenses,
-        ["payment_date", "currency_code", "payment_method", "description", "created_at", "updated_at"]
+        ["payment_date", "currency_code", "payment_method", "description", "created_at", "updated_at"],
     )
     usage_categories = _normalize_text_columns(usage_categories, ["name_ja", "name_en"])
     tax_categories = _normalize_text_columns(tax_categories, ["name_ja", "name_en"])
     city_airports = _normalize_text_columns(city_airports, [])
     airports = _normalize_text_columns(
         airports,
-        ["name", "name_ja", "city", "city_ja", "country", "country_ja", "iata_code", "icao_code", "timezone_name"]
+        ["name", "name_ja", "city", "city_ja", "country", "country_ja", "iata_code", "icao_code", "timezone_name"],
     )
     youtube_videos = _normalize_text_columns(
         youtube_videos,
@@ -127,15 +162,19 @@ def load_data() -> AppData:
             "license",
             "matched_status",
             "default_language",
-        ]
+            "default_audio_language",
+            "search_query",
+            "created_at",
+            "updated_at",
+        ],
     )
     queries_content = _normalize_text_columns(
         queries_content,
-        ["query_text", "language_code", "created_at", "updated_at"]
+        ["query_text", "language_code", "created_at", "updated_at"],
     )
     query_hits = _normalize_text_columns(
         query_hits,
-        ["video_id", "searched_at", "matched_status", "created_at", "updated_at"]
+        ["video_id", "searched_at", "matched_status", "created_at", "updated_at"],
     )
 
     for col in ["country_id", "flag"]:
@@ -153,9 +192,8 @@ def load_data() -> AppData:
     for col in ["id", "sort_order", "is_enabled"]:
         usage_categories = _normalize_numeric_column(usage_categories, col)
 
-    tax_categories = _normalize_numeric_column(tax_categories, "id")
-    tax_categories = _normalize_numeric_column(tax_categories, "sort_order")
-    tax_categories = _normalize_numeric_column(tax_categories, "is_enabled")
+    for col in ["id", "sort_order", "is_enabled"]:
+        tax_categories = _normalize_numeric_column(tax_categories, col)
 
     for col in ["city_id", "airport_id"]:
         city_airports = _normalize_numeric_column(city_airports, col)
@@ -163,14 +201,7 @@ def load_data() -> AppData:
     for col in ["airport_id", "latitude", "longitude", "altitude_ft", "timezone_offset", "priority"]:
         airports = _normalize_numeric_column(airports, col)
 
-    for col in [
-        "city_id",
-        "view_count",
-        "like_count",
-        "duration_sec",
-        "comment_count",
-        "like_rate",
-    ]:
+    for col in ["city_id", "view_count", "like_count", "duration_sec", "comment_count", "like_rate"]:
         youtube_videos = _normalize_numeric_column(youtube_videos, col)
 
     for col in ["id", "city_id", "priority", "is_active"]:
@@ -194,19 +225,29 @@ def load_data() -> AppData:
     )
 
 
+@st.cache_resource(show_spinner=False)
+def get_gspread_client():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
 
-YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
+    try:
+        service_account_info = None
 
+        if hasattr(st, "secrets"):
+            if "gcp_service_account" in st.secrets:
+                service_account_info = dict(st.secrets["gcp_service_account"])
+            elif "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+                service_account_info = dict(st.secrets["connections"]["gsheets"])
 
-class YouTubeApiError(RuntimeError):
-    pass
+        if service_account_info:
+            credentials = Credentials.from_service_account_info(service_account_info, scopes=scopes)
+            return gspread.authorize(credentials)
+    except Exception:
+        pass
 
-
-def _debug_log(debug: List[str], message: str) -> None:
-    timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    line = f"[{timestamp}] {message}"
-    print(line)
-    debug.append(line)
+    return None
 
 
 def _normalize_header(value: object) -> str:
@@ -235,10 +276,6 @@ def _int_or_none(value: object) -> Optional[int]:
             return int(float(value))
         except (TypeError, ValueError):
             return None
-
-
-def _now_string() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def get_youtube_api_key() -> Optional[str]:
@@ -311,7 +348,9 @@ def _pick_thumbnail_url(thumbnails: Optional[dict]) -> Optional[str]:
 def _parse_iso8601_duration_to_seconds(duration: Optional[str]) -> Optional[int]:
     if not duration:
         return None
-    pattern = re.compile(r"^P(?:(?P<days>\d+)D)?(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)?$")
+    pattern = re.compile(
+        r"^P(?:(?P<days>\d+)D)?(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)?$"
+    )
     match = pattern.match(duration)
     if not match:
         return None
@@ -345,9 +384,21 @@ def _generate_youtube_query_texts(city_detail: Dict[str, Any], max_queries: int 
     return queries
 
 
-def _search_videos_for_query(*, api_key: str, session: requests.Session, query_text: str, language_code: str, max_results: int, debug: Optional[List[str]] = None) -> List[dict]:
+def _search_videos_for_query(
+    *,
+    api_key: str,
+    session: requests.Session,
+    query_text: str,
+    language_code: str,
+    max_results: int,
+    debug: Optional[List[str]] = None,
+) -> List[dict]:
     if debug is not None:
-        _debug_log(debug, f"_search_videos_for_query start query={query_text!r} api_key_prefix={(api_key[:8] + '...') if api_key else None}")
+        _debug_log(
+            debug,
+            f"_search_videos_for_query start query={query_text!r} api_key_prefix={(api_key[:8] + '...') if api_key else None}",
+        )
+
     params = {
         "part": "snippet",
         "q": query_text,
@@ -359,8 +410,10 @@ def _search_videos_for_query(*, api_key: str, session: requests.Session, query_t
         "key": api_key,
     }
     payload = _youtube_get("search", params, session)
+
     if debug is not None:
         _debug_log(debug, f"search response items={len(payload.get('items', []))} for query={query_text!r}")
+
     hits = []
     for index, item in enumerate(payload.get("items", []), start=1):
         video_id = ((item.get("id") or {}).get("videoId"))
@@ -369,14 +422,21 @@ def _search_videos_for_query(*, api_key: str, session: requests.Session, query_t
         hits.append({"video_id": video_id, "rank": index})
         if len(hits) >= max_results:
             break
+
     return hits
 
 
-def _fetch_video_details(api_key: str, session: requests.Session, video_ids: List[str], debug: Optional[List[str]] = None) -> Dict[str, dict]:
+def _fetch_video_details(
+    api_key: str,
+    session: requests.Session,
+    video_ids: List[str],
+    debug: Optional[List[str]] = None,
+) -> Dict[str, dict]:
     if not video_ids:
         if debug is not None:
             _debug_log(debug, "_fetch_video_details skipped because video_ids is empty")
         return {}
+
     details = {}
     for start in range(0, len(video_ids), 50):
         batch_ids = video_ids[start:start + 50]
@@ -386,7 +446,10 @@ def _fetch_video_details(api_key: str, session: requests.Session, video_ids: Lis
             "key": api_key,
         }
         if debug is not None:
-            _debug_log(debug, f"_fetch_video_details request batch_size={len(batch_ids)} api_key_prefix={(api_key[:8] + '...') if api_key else None}")
+            _debug_log(
+                debug,
+                f"_fetch_video_details request batch_size={len(batch_ids)} api_key_prefix={(api_key[:8] + '...') if api_key else None}",
+            )
         payload = _youtube_get("videos", params, session)
         if debug is not None:
             _debug_log(debug, f"_fetch_video_details response items={len(payload.get('items', []))}")
@@ -394,6 +457,7 @@ def _fetch_video_details(api_key: str, session: requests.Session, video_ids: Lis
             video_id = item.get("id")
             if video_id:
                 details[video_id] = item
+
     return details
 
 
@@ -417,9 +481,12 @@ def _append_rows(sheet_name: str, rows: List[Dict[str, Any]], debug: Optional[Li
 
     if debug is not None:
         _debug_log(debug, f"_append_rows start sheet={sheet_name} rows={len(rows)}")
+
     client = get_gspread_client()
     if client is None:
-        raise SheetsWriteError("Google Sheets の書き込み認証が未設定です。.streamlit/secrets.toml に service account を設定してください。")
+        raise SheetsWriteError(
+            "Google Sheets の書き込み認証が未設定です。.streamlit/secrets.toml に service account を設定してください。"
+        )
 
     spreadsheet = client.open_by_key(SHEET_ID)
     worksheet = spreadsheet.worksheet(sheet_name)
@@ -429,28 +496,36 @@ def _append_rows(sheet_name: str, rows: List[Dict[str, Any]], debug: Optional[Li
 
     values = [_build_row_for_headers(headers, row) for row in rows]
     worksheet.append_rows(values, value_input_option="USER_ENTERED")
+
     if debug is not None:
         _debug_log(debug, f"_append_rows success sheet={sheet_name} rows={len(rows)}")
 
 
-def _build_query_content_rows(existing_df: pd.DataFrame, city_id: int, query_texts: List[str], language_code: str = "ja") -> List[Dict[str, Any]]:
+def _build_query_content_rows(
+    existing_df: pd.DataFrame,
+    city_id: int,
+    query_texts: List[str],
+    language_code: str = "ja",
+) -> List[Dict[str, Any]]:
     next_id = _next_sheet_id(existing_df)
     now = _now_string()
     rows = []
     for index, query_text in enumerate(query_texts):
-        rows.append({
-            "id": next_id + index,
-            "city_id": city_id,
-            "query_text": query_text,
-            "querytext": query_text,
-            "language_code": language_code,
-            "languagecode": language_code,
-            "priority": index + 1,
-            "is_active": 1,
-            "isactive": 1,
-            "created_at": now,
-            "updated_at": now,
-        })
+        rows.append(
+            {
+                "id": next_id + index,
+                "city_id": city_id,
+                "query_text": query_text,
+                "querytext": query_text,
+                "language_code": language_code,
+                "languagecode": language_code,
+                "priority": index + 1,
+                "is_active": 1,
+                "isactive": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
     return rows
 
 
@@ -464,57 +539,127 @@ def _build_query_hit_rows(existing_df: pd.DataFrame, hit_rows: List[Dict[str, An
     return rows
 
 
-def _build_video_rows(existing_df: pd.DataFrame, city_id: int, query_texts_by_video: OrderedDict, details: Dict[str, dict], language_code: str = "ja") -> List[Dict[str, Any]]:
+def _normalize_alias_text(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"[‐-‒–—―ーｰ\-]", "", text)
+    text = text.replace("'", "").replace("’", "").replace("`", "")
+    text = re.sub(r"[()\[\]{}.,/\\:;!?\"“”‘’]", "", text)
+    text = re.sub(r"\s+", "", text)
+    return text
+
+
+def _get_city_aliases_match(city_id: int, city_detail: Dict[str, Any], cities_df: pd.DataFrame) -> List[str]:
+    raw_value = str(city_detail.get("city_aliases_match", "") or "").strip()
+
+    if not raw_value and cities_df is not None and not cities_df.empty:
+        base = cities_df.copy()
+        if "city_id" in base.columns:
+            base["city_id"] = pd.to_numeric(base["city_id"], errors="coerce")
+            matched = base[base["city_id"] == pd.to_numeric(city_id, errors="coerce")]
+            if not matched.empty and "city_aliases_match" in matched.columns:
+                raw_value = str(matched.iloc[0].get("city_aliases_match", "") or "").strip()
+
+    aliases: List[str] = []
+    for part in str(raw_value or "").split("|"):
+        normalized = _normalize_alias_text(part)
+        if normalized and normalized not in aliases:
+            aliases.append(normalized)
+
+    if not aliases:
+        for value in [city_detail.get("city_jp", ""), city_detail.get("city_en", "")]:
+            normalized = _normalize_alias_text(value)
+            if normalized and normalized not in aliases:
+                aliases.append(normalized)
+
+    return aliases
+
+
+def _video_contains_city_alias(detail_item: Optional[dict], city_aliases: List[str]) -> bool:
+    if not detail_item or not city_aliases:
+        return False
+
+    snippet = detail_item.get("snippet") or {}
+    title = snippet.get("title", "") or ""
+    description = snippet.get("description", "") or ""
+    haystack = _normalize_alias_text(f"{title} {description}")
+
+    if not haystack:
+        return False
+
+    return any(alias in haystack for alias in city_aliases)
+
+
+def _build_video_rows(
+    existing_df: pd.DataFrame,
+    city_id: int,
+    query_texts_by_video: OrderedDict,
+    details: Dict[str, dict],
+    city_aliases: List[str],
+    language_code: str = "ja",
+) -> List[Dict[str, Any]]:
     next_id = _next_sheet_id(existing_df)
     run_ts = _now_string()
+
     existing_video_ids = set()
     if existing_df is not None and not existing_df.empty and "video_id" in existing_df.columns:
         existing_video_ids = set(existing_df["video_id"].dropna().astype(str).str.strip())
 
     rows: List[Dict[str, Any]] = []
     row_index = 0
+
     for video_id, query_texts in query_texts_by_video.items():
         if video_id in existing_video_ids:
             continue
+
         item = details.get(video_id)
         if not item:
             continue
+
         snippet = item.get("snippet") or {}
         if (snippet.get("defaultLanguage") or "").strip().lower() != language_code:
+            continue
+
+        if not _video_contains_city_alias(item, city_aliases):
             continue
 
         content = item.get("contentDetails") or {}
         stats = item.get("statistics") or {}
         status = item.get("status") or {}
-        rows.append({
-            "id": next_id + row_index,
-            "city_id": city_id,
-            "video_id": video_id,
-            "url": f"https://www.youtube.com/watch?v={video_id}",
-            "title": snippet.get("title"),
-            "description": snippet.get("description"),
-            "published_at": snippet.get("publishedAt"),
-            "channel_id": snippet.get("channelId"),
-            "channel_title": snippet.get("channelTitle"),
-            "duration_sec": _parse_iso8601_duration_to_seconds(content.get("duration")),
-            "thumbnail_url": _pick_thumbnail_url(snippet.get("thumbnails")),
-            "view_count": _int_or_none(stats.get("viewCount")),
-            "like_count": _int_or_none(stats.get("likeCount")),
-            "comment_count": _int_or_none(stats.get("commentCount")),
-            "default_language": snippet.get("defaultLanguage"),
-            "default_audio_language": snippet.get("defaultAudioLanguage"),
-            "caption_flag": str(content.get("caption")).lower() == "true" if content.get("caption") is not None else None,
-            "search_query": " | ".join(query_texts),
-            "privacy_status": status.get("privacyStatus"),
-            "privacyStatus": status.get("privacyStatus"),
-            "embeddable": status.get("embeddable"),
-            "madeForKids": status.get("madeForKids"),
-            "upload_status": status.get("uploadStatus"),
-            "uploadStatus": status.get("uploadStatus"),
-            "created_at": run_ts,
-            "updated_at": run_ts,
-        })
+
+        rows.append(
+            {
+                "id": next_id + row_index,
+                "city_id": city_id,
+                "video_id": video_id,
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "title": snippet.get("title"),
+                "description": snippet.get("description"),
+                "published_at": snippet.get("publishedAt"),
+                "channel_id": snippet.get("channelId"),
+                "channel_title": snippet.get("channelTitle"),
+                "duration_sec": _parse_iso8601_duration_to_seconds(content.get("duration")),
+                "thumbnail_url": _pick_thumbnail_url(snippet.get("thumbnails")),
+                "view_count": _int_or_none(stats.get("viewCount")),
+                "like_count": _int_or_none(stats.get("likeCount")),
+                "comment_count": _int_or_none(stats.get("commentCount")),
+                "default_language": snippet.get("defaultLanguage"),
+                "default_audio_language": snippet.get("defaultAudioLanguage"),
+                "caption_flag": str(content.get("caption")).lower() == "true" if content.get("caption") is not None else None,
+                "search_query": " | ".join(query_texts),
+                "privacy_status": status.get("privacyStatus"),
+                "privacyStatus": status.get("privacyStatus"),
+                "embeddable": status.get("embeddable"),
+                "madeForKids": status.get("madeForKids"),
+                "upload_status": status.get("uploadStatus"),
+                "uploadStatus": status.get("uploadStatus"),
+                "created_at": run_ts,
+                "updated_at": run_ts,
+            }
+        )
         row_index += 1
+
     return rows
 
 
@@ -529,6 +674,10 @@ def collect_city_youtube_videos(
 ) -> Dict[str, Any]:
     debug: List[str] = []
     _debug_log(debug, f"collect_city_youtube_videos start city_id={city_id} city_jp={city_detail.get('city_jp')!r}")
+
+    city_aliases = _get_city_aliases_match(city_id, city_detail, data.cities)
+    _debug_log(debug, f"city_aliases_match_count={len(city_aliases)} aliases={city_aliases[:10]}")
+
     query_texts = _generate_youtube_query_texts(city_detail, max_queries=max_queries)
     _debug_log(debug, f"generated query_texts={query_texts}")
     if not query_texts:
@@ -554,6 +703,7 @@ def collect_city_youtube_videos(
         query_id = query_row["id"]
         query_text = query_row.get("query_text", "")
         searched_at = _now_string()
+
         try:
             search_hits = _search_videos_for_query(
                 api_key=api_key,
@@ -565,35 +715,40 @@ def collect_city_youtube_videos(
             )
         except Exception as exc:
             _debug_log(debug, f"search error query_id={query_id} query_text={query_text!r} exc={type(exc).__name__}: {exc}")
-            all_hit_rows.append({
-                "city_id": city_id,
-                "query_id": query_id,
-                "video_id": "",
-                "searched_at": searched_at,
-                "result_rank": 0,
-                "matched_status": f"error:{type(exc).__name__}",
-                "created_at": searched_at,
-                "updated_at": searched_at,
-            })
+            all_hit_rows.append(
+                {
+                    "city_id": city_id,
+                    "query_id": query_id,
+                    "video_id": "",
+                    "searched_at": searched_at,
+                    "result_rank": 0,
+                    "matched_status": f"error:{type(exc).__name__}",
+                    "created_at": searched_at,
+                    "updated_at": searched_at,
+                }
+            )
             continue
 
         if not search_hits:
             _debug_log(debug, f"no search hits query_id={query_id} query_text={query_text!r}")
-            all_hit_rows.append({
-                "city_id": city_id,
-                "query_id": query_id,
-                "video_id": "",
-                "searched_at": searched_at,
-                "result_rank": 0,
-                "matched_status": "no_results",
-                "created_at": searched_at,
-                "updated_at": searched_at,
-            })
+            all_hit_rows.append(
+                {
+                    "city_id": city_id,
+                    "query_id": query_id,
+                    "video_id": "",
+                    "searched_at": searched_at,
+                    "result_rank": 0,
+                    "matched_status": "no_results",
+                    "created_at": searched_at,
+                    "updated_at": searched_at,
+                }
+            )
             continue
 
         _debug_log(debug, f"search hits query_id={query_id} count={len(search_hits)}")
         for hit in search_hits:
             video_id = hit["video_id"]
+
             if video_id not in query_texts_by_video:
                 query_texts_by_video[video_id] = []
             if query_text not in query_texts_by_video[video_id]:
@@ -603,22 +758,26 @@ def collect_city_youtube_videos(
                 seen_video_ids.add(video_id)
                 video_first_seen_order.append(video_id)
 
-            all_hit_rows.append({
-                "city_id": city_id,
-                "query_id": query_id,
-                "video_id": video_id,
-                "searched_at": searched_at,
-                "result_rank": hit["rank"],
-                "matched_status": "fetched",
-                "created_at": searched_at,
-                "updated_at": searched_at,
-            })
+            all_hit_rows.append(
+                {
+                    "city_id": city_id,
+                    "query_id": query_id,
+                    "video_id": video_id,
+                    "searched_at": searched_at,
+                    "result_rank": hit["rank"],
+                    "matched_status": "fetched",
+                    "created_at": searched_at,
+                    "updated_at": searched_at,
+                }
+            )
 
     _debug_log(debug, f"video_first_seen_order_count={len(video_first_seen_order)} ids={video_first_seen_order}")
     details = _fetch_video_details(api_key, session, video_first_seen_order, debug=debug)
     _debug_log(debug, f"details_count={len(details)}")
+
     filtered_hit_rows: List[Dict[str, Any]] = []
     kept_video_ids: List[str] = []
+
     city_existing = data.youtube_videos.copy() if data.youtube_videos is not None else pd.DataFrame()
     existing_city_video_ids = set()
     if not city_existing.empty and "city_id" in city_existing.columns and "video_id" in city_existing.columns:
@@ -631,14 +790,18 @@ def collect_city_youtube_videos(
         if not video_id:
             filtered_hit_rows.append(row)
             continue
+
         detail_item = details.get(video_id)
         snippet = (detail_item or {}).get("snippet") or {}
         default_language = (snippet.get("defaultLanguage") or "").strip().lower()
+        matched_alias = _video_contains_city_alias(detail_item, city_aliases)
 
         if video_id in existing_city_video_ids:
             row["matched_status"] = "already_exists"
         elif default_language != language_code:
-            row["matched_status"] = "filtered_out"
+            row["matched_status"] = "filtered_out_language"
+        elif not matched_alias:
+            row["matched_status"] = "filtered_out_city_alias"
         elif video_id in kept_video_ids:
             row["matched_status"] = "duplicate"
         elif len(kept_video_ids) >= max_total_videos:
@@ -646,9 +809,17 @@ def collect_city_youtube_videos(
         else:
             row["matched_status"] = "adopted"
             kept_video_ids.append(video_id)
+
         filtered_hit_rows.append(row)
 
-    video_rows = _build_video_rows(data.youtube_videos, city_id, query_texts_by_video, details, language_code=language_code)
+    video_rows = _build_video_rows(
+        data.youtube_videos,
+        city_id,
+        query_texts_by_video,
+        details,
+        city_aliases=city_aliases,
+        language_code=language_code,
+    )
     if len(video_rows) > max_total_videos:
         video_rows = video_rows[:max_total_videos]
 
@@ -656,12 +827,14 @@ def collect_city_youtube_videos(
     for row in filtered_hit_rows:
         video_id = str(row.get("video_id", "") or "")
         if row.get("matched_status") == "adopted" and video_id not in adopted_ids:
-            row["matched_status"] = "filtered_out"
+            row["matched_status"] = "filtered_out_city_alias"
 
     _debug_log(debug, f"filtered_hit_rows_count={len(filtered_hit_rows)} kept_video_ids={kept_video_ids}")
     _debug_log(debug, f"video_rows_count={len(video_rows)} adopted_ids={list(adopted_ids)}")
+
     query_hit_rows = _build_query_hit_rows(data.query_hits, filtered_hit_rows)
     _append_rows("Query_hits", query_hit_rows, debug=debug)
+
     if video_rows:
         _append_rows("Youtube_videos", video_rows, debug=debug)
     else:
@@ -669,7 +842,13 @@ def collect_city_youtube_videos(
 
     load_data.clear()
     _debug_log(debug, f"collect_city_youtube_videos end added_videos={len(video_rows)}")
-    return {"added_videos": len(video_rows), "queries": query_rows, "query_hits": query_hit_rows, "debug": debug}
+    return {
+        "added_videos": len(video_rows),
+        "queries": query_rows,
+        "query_hits": query_hit_rows,
+        "debug": debug,
+    }
+
 
 def categories_enabled(df: pd.DataFrame) -> pd.DataFrame:
     if "is_enabled" in df.columns:
@@ -741,6 +920,16 @@ def get_latest_exchange_rate(from_currency: str, to_currency: str = "JPY") -> fl
 
 
 def get_city_airport_text(city_id: int, city_airports: pd.DataFrame, airports: pd.DataFrame) -> str:
+    if city_airports is None or city_airports.empty:
+        return ""
+    if airports is None or airports.empty:
+        return ""
+
+    if "city_id" not in city_airports.columns or "airport_id" not in city_airports.columns:
+        return ""
+    if "airport_id" not in airports.columns:
+        return ""
+
     links = city_airports[city_airports["city_id"] == city_id].copy()
     if links.empty:
         return ""
@@ -773,13 +962,11 @@ def get_city_detail(city_id: int, data: AppData) -> Dict[str, Any]:
     city_row = cities[cities["city_id"] == city_id]
     if city_row.empty:
         raise ValueError("指定された city_id の都市が見つかりません。")
-
     city_row = city_row.iloc[0]
 
     country_row = countries[countries["country_id"] == city_row["country_id"]]
     if country_row.empty:
         raise ValueError("都市に対応する country が見つかりません。")
-
     country_row = country_row.iloc[0]
 
     currency_code = str(country_row.get("currency_code", "")).strip()
@@ -809,135 +996,5 @@ def get_city_detail(city_id: int, data: AppData) -> Dict[str, Any]:
         "timezone_offset": city_row.get("timezone_offset", ""),
         "elevation": city_row.get("elevation", ""),
         "cost_index": city_row.get("cost_index", ""),
+        "city_aliases_match": city_row.get("city_aliases_match", "") if "city_aliases_match" in city_row.index else "",
     }
-
-
-def format_date(dt_value: datetime) -> str:
-    return dt_value.strftime("%Y/%m/%d")
-
-
-def format_datetime(dt_value: datetime) -> str:
-    return dt_value.strftime("%Y/%m/%d %H:%M:%S")
-
-
-@st.cache_resource(show_spinner=False)
-def get_gspread_client():
-    import gspread
-    from google.oauth2.service_account import Credentials
-
-    service_account_info = None
-    if "gcp_service_account" in st.secrets:
-        service_account_info = dict(st.secrets["gcp_service_account"])
-    elif "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
-        service_account_info = dict(st.secrets["connections"]["gsheets"])
-
-    if service_account_info is None:
-        return None
-
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    credentials = Credentials.from_service_account_info(service_account_info, scopes=scopes)
-    return gspread.authorize(credentials)
-
-
-def append_expense_row(expense_row: Dict[str, Any], sheet_name: str = "Expenses") -> None:
-    if debug is not None:
-        _debug_log(debug, f"_append_rows start sheet={sheet_name} rows={len(rows)}")
-    client = get_gspread_client()
-    if client is None:
-        raise SheetsWriteError(
-            "Google Sheets の書き込み認証が未設定です。.streamlit/secrets.toml に service account を設定してください。"
-        )
-
-    spreadsheet = client.open_by_key(SHEET_ID)
-    worksheet = spreadsheet.worksheet(sheet_name)
-
-    headers = worksheet.row_values(1)
-    if not headers:
-        raise SheetsWriteError("Expenses シートのヘッダーが取得できませんでした。")
-
-    ordered_values = [expense_row.get(header, "") for header in headers]
-    worksheet.append_row(ordered_values, value_input_option="USER_ENTERED")
-    load_data.clear()
-
-
-def build_expense_row(
-    expenses_df: pd.DataFrame,
-    payment_date: datetime,
-    currency_code: str,
-    amount: float,
-    exchange_rate: float,
-    payment_method: str,
-    description: str,
-    usage_category_id: int,
-    tax_category_id: int,
-) -> Dict[str, Any]:
-    now = pd.Timestamp.now(tz=JST).to_pydatetime()
-    existing_ids = pd.to_numeric(expenses_df.get("id", pd.Series(dtype=float)), errors="coerce").dropna()
-    next_id = int(existing_ids.max()) + 1 if not existing_ids.empty else 1
-    amount_base = round(float(amount) * float(exchange_rate))
-
-    return {
-        "id": next_id,
-        "payment_date": format_date(payment_date),
-        "currency_code": currency_code,
-        "amount": float(amount),
-        "exchange_rate": float(exchange_rate),
-        "amount_base": int(amount_base),
-        "payment_method": payment_method,
-        "description": description.strip(),
-        "usage_categories_id": int(usage_category_id),
-        "tax_categories_id": int(tax_category_id),
-        "created_at": format_datetime(now),
-        "updated_at": format_datetime(now),
-    }
-
-
-def enrich_expenses(expenses: pd.DataFrame, usage_categories: pd.DataFrame, tax_categories: pd.DataFrame) -> pd.DataFrame:
-    df = expenses.copy()
-    if df.empty:
-        return df
-
-    usage_map = categories_enabled(usage_categories)[["id", "name_ja", "name_en"]].rename(
-        columns={"id": "usage_categories_id", "name_ja": "usage_category_name_ja", "name_en": "usage_category_name_en"}
-    )
-    tax_map = categories_enabled(tax_categories)[["id", "name_ja", "name_en"]].rename(
-        columns={"id": "tax_categories_id", "name_ja": "tax_category_name_ja", "name_en": "tax_category_name_en"}
-    )
-
-    df = df.merge(usage_map, on="usage_categories_id", how="left")
-    df = df.merge(tax_map, on="tax_categories_id", how="left")
-    df["payment_date_dt"] = pd.to_datetime(df["payment_date"], format="%Y/%m/%d", errors="coerce")
-    df["month"] = df["payment_date_dt"].dt.to_period("M").astype(str)
-    df["day"] = df["payment_date_dt"].dt.strftime("%Y/%m/%d")
-    df["amount_base"] = pd.to_numeric(df["amount_base"], errors="coerce").fillna(0)
-    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
-    return df
-
-
-def build_pivot_table(expenses: pd.DataFrame, category_basis: str, period_basis: str) -> pd.DataFrame:
-    if expenses.empty:
-        return pd.DataFrame()
-
-    if category_basis == "用途別":
-        category_col = "usage_category_name_ja"
-    else:
-        category_col = "tax_category_name_ja"
-
-    index_col = "day" if period_basis == "日次" else "month"
-
-    pivot = pd.pivot_table(
-        expenses,
-        index=index_col,
-        columns=category_col,
-        values="amount_base",
-        aggfunc="sum",
-        fill_value=0,
-    )
-
-    pivot["合計"] = pivot.sum(axis=1)
-    ordered_cols = [col for col in pivot.columns if col != "合計"] + ["合計"]
-    pivot = pivot[ordered_cols].sort_index()
-    return pivot.reset_index().rename(columns={index_col: period_basis})

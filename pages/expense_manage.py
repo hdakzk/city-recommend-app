@@ -19,11 +19,13 @@ from utils.expense_db import (
     update_expense_record,
 )
 from utils.expense_manage_support import (
+    build_bulk_expense_edit_frame,
+    build_bulk_expense_update_plan,
     build_expense_update_payload,
     build_wechat_expense_records,
     find_category_label_by_id,
     get_expense_row_by_id,
-    get_selected_expense_id,
+    get_selected_expense_ids,
 )
 
 st.set_page_config(
@@ -62,6 +64,7 @@ st.markdown(
     div[data-testid="stDataEditor"] div[role="table"] {
         font-size: 0.92rem;
     }
+
     </style>
     """,
     unsafe_allow_html=True,
@@ -191,7 +194,7 @@ def render_selectable_raw_data_table(
     non_numeric_cols: list[str],
     table_version: int,
     float_format_cols: dict[str, str] | None = None,
-) -> int | None:
+) -> list[int]:
     table_event = st.dataframe(
         df,
         column_config=build_column_config(df, non_numeric_cols, float_format_cols),
@@ -199,11 +202,11 @@ def render_selectable_raw_data_table(
         width="stretch",
         key=f"expense_raw_table_{table_version}",
         on_select="rerun",
-        selection_mode="single-row",
+        selection_mode="multi-row",
     )
 
     selected_rows = getattr(getattr(table_event, "selection", None), "rows", [])
-    return get_selected_expense_id(df, selected_rows)
+    return get_selected_expense_ids(df, selected_rows)
 
 
 def create_pivot(df: pd.DataFrame, index_col: str, category_col: str, category_order: list[str]) -> pd.DataFrame:
@@ -468,6 +471,15 @@ def reset_wechat_import_state() -> None:
     st.session_state["wechat_import_dialog_open"] = False
 
 
+def reset_bulk_expense_edit_state() -> None:
+    st.session_state["bulk_edit_expense_ids"] = []
+    st.session_state["bulk_expense_edit_open"] = False
+    st.session_state["bulk_expense_confirm_open"] = False
+    st.session_state["bulk_expense_confirm_submitted"] = False
+    st.session_state.pop("bulk_expense_pending_plan", None)
+    st.session_state.pop("bulk_expense_editor", None)
+
+
 @st.dialog("Wechat登録")
 def render_wechat_import_dialog(user_id: str, existing_expenses_df: pd.DataFrame) -> None:
     uploaded_file = st.file_uploader(
@@ -626,11 +638,136 @@ def render_expense_edit_dialog(
         st.error(f"更新に失敗しました: {e}")
 
 
+@st.dialog("経費データを一括変更", width="large")
+def render_bulk_expense_edit_dialog(
+    *,
+    selected_df: pd.DataFrame,
+    usage_options: dict,
+    tax_options: dict,
+    user_id: str,
+) -> None:
+    selected_count = len(selected_df)
+    st.caption(f"選択件数: {selected_count} 件")
+
+    payment_method_options = ["現金", "クレジットカード", "電子決済", "WISE"]
+    usage_labels = list(usage_options.keys())
+    tax_labels = list(tax_options.keys())
+    editable_df = build_bulk_expense_edit_frame(selected_df, usage_options, tax_options)
+
+    with st.form("expense_bulk_edit_form"):
+        st.caption("表内の各セルを直接編集してください。行ごと・項目ごとに異なる値を入力できます。")
+        edited_df = st.data_editor(
+            editable_df,
+            hide_index=True,
+            width="stretch",
+            disabled=["ID"],
+            column_config={
+                "ID": st.column_config.NumberColumn("ID", format="%d"),
+                "支払日": st.column_config.DateColumn("支払日", format="YYYY-MM-DD"),
+                "決済方法": st.column_config.SelectboxColumn("決済方法", options=payment_method_options, required=True),
+                "用途カテゴリ": st.column_config.SelectboxColumn("用途カテゴリ", options=usage_labels, required=True),
+                "税務カテゴリ": st.column_config.SelectboxColumn("税務カテゴリ", options=tax_labels, required=True),
+                "内容": st.column_config.TextColumn("内容"),
+                "金額": st.column_config.NumberColumn("金額", min_value=0.0, step=1.0, format="%.0f"),
+            },
+            key="bulk_expense_editor",
+        )
+
+        col_save, col_close = st.columns(2)
+        with col_save:
+            save_clicked = st.form_submit_button("この内容で保存", type="primary", width="stretch")
+        with col_close:
+            close_clicked = st.form_submit_button("閉じる", width="stretch")
+
+    if close_clicked:
+        reset_bulk_expense_edit_state()
+        st.rerun()
+
+    if save_clicked:
+        try:
+            update_plan, _ = build_bulk_expense_update_plan(
+                selected_df,
+                edited_df,
+                usage_options,
+                tax_options,
+            )
+            st.session_state["bulk_expense_pending_plan"] = update_plan
+            st.session_state["bulk_expense_edit_open"] = False
+            st.session_state["bulk_expense_confirm_open"] = True
+            st.rerun()
+        except Exception as e:
+            st.session_state["bulk_expense_edit_open"] = True
+            st.session_state["bulk_expense_confirm_open"] = False
+            st.session_state.pop("bulk_expense_pending_plan", None)
+            st.error(f"保存内容の確認に失敗しました: {e}")
+
+
+@st.dialog("保存確認", width="small")
+def render_bulk_expense_confirm_dialog() -> None:
+    update_plan = st.session_state.get("bulk_expense_pending_plan")
+    if not update_plan:
+        st.session_state["bulk_expense_confirm_open"] = False
+        st.rerun()
+
+    st.write("この内容で登録しますか？")
+
+    col_confirm, col_cancel = st.columns(2)
+    with col_confirm:
+        confirm_clicked = st.button("登録する", type="primary", width="stretch")
+    with col_cancel:
+        cancel_clicked = st.button("戻る", width="stretch")
+
+    if cancel_clicked:
+        st.session_state["bulk_expense_confirm_open"] = False
+        st.session_state["bulk_expense_edit_open"] = True
+        st.rerun()
+
+    if not confirm_clicked:
+        return
+
+    st.session_state["bulk_expense_confirm_open"] = False
+    st.session_state["bulk_expense_confirm_submitted"] = True
+    st.rerun()
+
+
 def main():
     user = require_authenticated_user()
     user_id = str(getattr(user, "id"))
 
+    if st.session_state.get("bulk_expense_confirm_submitted", False):
+        update_plan = st.session_state.get("bulk_expense_pending_plan")
+        if not update_plan:
+            reset_bulk_expense_edit_state()
+            st.session_state["expense_manage_flash_message"] = (
+                "warning",
+                "保存対象データが見つかりませんでした。",
+            )
+            st.rerun()
+
+        try:
+            for expense_id, payload in update_plan:
+                update_expense_record(expense_id, user_id, payload)
+            reset_bulk_expense_edit_state()
+            reset_expense_edit_state()
+            st.session_state["expense_manage_flash_message"] = (
+                "success",
+                f"経費データを {len(update_plan)} 件更新しました。",
+            )
+            st.rerun()
+        except Exception as e:
+            st.session_state["bulk_expense_confirm_submitted"] = False
+            st.session_state["expense_manage_flash_message"] = (
+                "error",
+                f"一括更新に失敗しました: {e}",
+            )
+            st.rerun()
+
     st.title("経費管理")
+
+    flash_message = st.session_state.pop("expense_manage_flash_message", None)
+    if flash_message:
+        level, message = flash_message
+        getattr(st, level)(message)
 
     today = date.today()
     default_start_date = date(today.year, 1, 1)
@@ -754,7 +891,7 @@ def main():
     render_monthly_stacked_chart(filtered_df, category_col, category_order)
 
     st.subheader("元データ")
-    st.caption("IDの行をタップ/クリックすると編集画面が開きます。")
+    st.caption("行を複数選択し、個別編集または一括変更を実行できます。")
 
     raw_cols = [
         c
@@ -813,32 +950,67 @@ def main():
     )
 
     table_version = int(st.session_state.get("expense_raw_table_version", 0))
-    selected_expense_id = render_selectable_raw_data_table(
+    selected_expense_ids = render_selectable_raw_data_table(
         raw_df,
         non_numeric_cols=["支払日", "通貨", "決済方法", "内容", "用途カテゴリ", "税務カテゴリ", "作成日時", "更新日時"],
         table_version=table_version,
         float_format_cols={"為替レート": "%.6f"},
     )
 
-    if selected_expense_id is not None:
-        st.session_state["editing_expense_id"] = selected_expense_id
+    st.caption(f"選択中: {len(selected_expense_ids)} 件")
+
+    col_single_edit, col_bulk_edit = st.columns(2)
+    with col_single_edit:
+        if st.button(
+            "個別編集",
+            width="stretch",
+            disabled=len(selected_expense_ids) != 1,
+        ):
+            reset_bulk_expense_edit_state()
+            st.session_state["editing_expense_id"] = selected_expense_ids[0]
+    with col_bulk_edit:
+        if st.button(
+            "一括変更",
+            type="primary",
+            width="stretch",
+            disabled=len(selected_expense_ids) == 0,
+        ):
+            reset_expense_edit_state()
+            st.session_state["bulk_edit_expense_ids"] = selected_expense_ids
+            st.session_state["bulk_expense_edit_open"] = True
 
     editing_expense_id = st.session_state.get("editing_expense_id")
-    if editing_expense_id is None:
-        return
+    if editing_expense_id is not None:
+        current_row = get_expense_row_by_id(df, editing_expense_id)
+        if current_row is None:
+            reset_expense_edit_state()
+            st.warning("編集対象の経費データが見つかりませんでした。")
+            st.rerun()
 
-    current_row = get_expense_row_by_id(df, editing_expense_id)
-    if current_row is None:
-        reset_expense_edit_state()
-        st.warning("編集対象の経費データが見つかりませんでした。")
-        st.rerun()
+        render_expense_edit_dialog(
+            current_row=current_row,
+            usage_options=usage_options,
+            tax_options=tax_options,
+            user_id=user_id,
+        )
 
-    render_expense_edit_dialog(
-        current_row=current_row,
-        usage_options=usage_options,
-        tax_options=tax_options,
-        user_id=user_id,
-    )
+    bulk_edit_ids = st.session_state.get("bulk_edit_expense_ids", [])
+    if st.session_state.get("bulk_expense_edit_open", False):
+        selected_bulk_df = df[df["id"].isin(bulk_edit_ids)].copy() if "id" in df.columns else pd.DataFrame()
+        if selected_bulk_df.empty:
+            reset_bulk_expense_edit_state()
+            st.warning("一括変更対象の経費データが見つかりませんでした。")
+            st.rerun()
+
+        render_bulk_expense_edit_dialog(
+            selected_df=selected_bulk_df,
+            usage_options=usage_options,
+            tax_options=tax_options,
+            user_id=user_id,
+        )
+
+    if st.session_state.get("bulk_expense_confirm_open", False):
+        render_bulk_expense_confirm_dialog()
 
 
 if __name__ == "__main__":

@@ -39,7 +39,6 @@ rsa==4.9.1
 six==1.17.0
 smmap==5.0.3
 streamlit==1.55.0
-streamlit-cookies-manager==0.2.0
 supabase==2.24.0
 tenacity==9.1.4
 toml==0.10.2

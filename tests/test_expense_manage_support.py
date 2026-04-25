@@ -15,11 +15,14 @@ from utils.expense_db import (
     upload_expense_receipt,
 )
 from utils.expense_manage_support import (
+    build_bulk_expense_edit_frame,
+    build_bulk_expense_update_plan,
     build_expense_update_payload,
     build_wechat_expense_records,
     find_category_label_by_id,
     get_expense_row_by_id,
     get_selected_expense_id,
+    get_selected_expense_ids,
 )
 
 
@@ -164,6 +167,10 @@ class ExpenseManageSupportTest(unittest.TestCase):
         self.assertIsNone(get_selected_expense_id(table_df, [1]))
         self.assertIsNone(get_selected_expense_id(table_df, []))
 
+    def test_get_selected_expense_ids_returns_unique_ids_in_selection_order(self):
+        table_df = pd.DataFrame([{"ID": 30}, {"ID": 20}, {"ID": 20}, {"ID": "x"}])
+        self.assertEqual(get_selected_expense_ids(table_df, [1, 2, 0, 3, 9]), [20, 30])
+
     def test_get_expense_row_by_id_returns_matching_row(self):
         expenses_df = pd.DataFrame(
             [{"id": 10, "description": "Lunch"}, {"id": 20, "description": "Hotel"}]
@@ -220,6 +227,245 @@ class ExpenseManageSupportTest(unittest.TestCase):
                 description="Lunch",
                 usage_category_id=None,
                 tax_category_id=3,
+            )
+
+    def test_build_bulk_expense_edit_frame_builds_rowwise_editor_source(self):
+        selected_expenses_df = pd.DataFrame(
+            [
+                {
+                    "id": 10,
+                    "payment_date": "2026/04/01",
+                    "amount": 100.0,
+                    "exchange_rate": 20.0,
+                    "amount_base": 2000,
+                    "payment_method": "現金",
+                    "description": "朝食",
+                    "usage_categories_id": 1,
+                    "tax_categories_id": 3,
+                },
+                {
+                    "id": 20,
+                    "payment_date": "2026/04/02",
+                    "amount": 150.0,
+                    "exchange_rate": 21.0,
+                    "amount_base": 3150,
+                    "payment_method": "WISE",
+                    "description": "昼食",
+                    "usage_categories_id": 2,
+                    "tax_categories_id": 4,
+                },
+            ]
+        )
+
+        editable_df = build_bulk_expense_edit_frame(
+            selected_expenses_df,
+            {"食費": 1, "交通": 2},
+            {"課税": 3, "非課税": 4},
+        )
+
+        self.assertEqual(editable_df.loc[0, "ID"], 10)
+        self.assertEqual(editable_df.loc[0, "支払日"], date(2026, 4, 1))
+        self.assertEqual(editable_df.loc[0, "用途カテゴリ"], "食費")
+        self.assertEqual(editable_df.loc[1, "税務カテゴリ"], "非課税")
+        self.assertEqual(editable_df.loc[1, "金額"], 150.0)
+
+    def test_build_bulk_expense_update_plan_builds_preview_and_payloads(self):
+        original_expenses_df = pd.DataFrame(
+            [
+                {
+                    "id": 10,
+                    "payment_date": "2026/04/01",
+                    "amount": 100.0,
+                    "exchange_rate": 20.0,
+                    "amount_base": 2000,
+                    "payment_method": "現金",
+                    "description": "朝食",
+                    "usage_categories_id": 1,
+                    "tax_categories_id": 3,
+                },
+                {
+                    "id": 20,
+                    "payment_date": "2026/04/02",
+                    "amount": 150.0,
+                    "exchange_rate": 21.0,
+                    "amount_base": 3150,
+                    "payment_method": "WISE",
+                    "description": "昼食",
+                    "usage_categories_id": 2,
+                    "tax_categories_id": 4,
+                },
+            ]
+        )
+
+        edited_expenses_df = pd.DataFrame(
+            [
+                {
+                    "ID": 10,
+                    "支払日": date(2026, 4, 5),
+                    "決済方法": "クレジットカード",
+                    "用途カテゴリ": "交通",
+                    "税務カテゴリ": "非課税",
+                    "内容": "交通費",
+                    "金額": 300.0,
+                },
+                {
+                    "ID": 20,
+                    "支払日": date(2026, 4, 2),
+                    "決済方法": "WISE",
+                    "用途カテゴリ": "交通",
+                    "税務カテゴリ": "非課税",
+                    "内容": "昼食",
+                    "金額": 200.0,
+                },
+            ]
+        )
+
+        update_plan, preview_df = build_bulk_expense_update_plan(
+            original_expenses_df,
+            edited_expenses_df,
+            {"食費": 1, "交通": 2},
+            {"課税": 3, "非課税": 4},
+        )
+
+        self.assertEqual(
+            update_plan,
+            [
+                (
+                    10,
+                    {
+                        "payment_date": "2026/04/05",
+                        "payment_method": "クレジットカード",
+                        "description": "交通費",
+                        "amount": 300.0,
+                        "amount_base": 6000,
+                        "usage_categories_id": 2,
+                        "tax_categories_id": 4,
+                    },
+                ),
+                (
+                    20,
+                    {
+                        "amount": 200.0,
+                        "amount_base": 4200,
+                    },
+                ),
+            ],
+        )
+        self.assertEqual(preview_df.loc[0, "用途カテゴリ(変更前)"], "食費")
+        self.assertEqual(preview_df.loc[0, "用途カテゴリ(変更後)"], "交通")
+        self.assertEqual(preview_df.loc[0, "支払日(変更後)"], "2026-04-05")
+        self.assertEqual(preview_df.loc[1, "金額(変更後)"], 200.0)
+        self.assertEqual(preview_df.loc[1, "円換算額(変更後)"], 4200)
+
+    def test_build_bulk_expense_update_plan_rejects_zero_selected_rows_boundary(self):
+        with self.assertRaises(ValueError):
+            build_bulk_expense_update_plan(
+                pd.DataFrame(),
+                pd.DataFrame([{"ID": 10}]),
+                {"食費": 1},
+                {"課税": 3},
+            )
+
+    def test_build_bulk_expense_update_plan_rejects_no_changes(self):
+        with self.assertRaises(ValueError):
+            build_bulk_expense_update_plan(
+                pd.DataFrame(
+                    [
+                        {
+                            "id": 10,
+                            "payment_date": "2026/04/01",
+                            "amount": 100.0,
+                            "exchange_rate": 20.0,
+                            "payment_method": "現金",
+                            "description": "朝食",
+                            "usage_categories_id": 1,
+                            "tax_categories_id": 3,
+                        }
+                    ]
+                ),
+                pd.DataFrame(
+                    [
+                        {
+                            "ID": 10,
+                            "支払日": date(2026, 4, 1),
+                            "決済方法": "現金",
+                            "用途カテゴリ": "食費",
+                            "税務カテゴリ": "課税",
+                            "内容": "朝食",
+                            "金額": 100.0,
+                        }
+                    ]
+                ),
+                {"食費": 1},
+                {"課税": 3},
+            )
+
+    def test_build_bulk_expense_update_plan_rejects_zero_amount_boundary(self):
+        with self.assertRaises(ValueError):
+            build_bulk_expense_update_plan(
+                pd.DataFrame(
+                    [
+                        {
+                            "id": 10,
+                            "payment_date": "2026/04/01",
+                            "amount": 100.0,
+                            "exchange_rate": 20.0,
+                            "payment_method": "現金",
+                            "description": "朝食",
+                            "usage_categories_id": 1,
+                            "tax_categories_id": 3,
+                        }
+                    ]
+                ),
+                pd.DataFrame(
+                    [
+                        {
+                            "ID": 10,
+                            "支払日": date(2026, 4, 1),
+                            "決済方法": "現金",
+                            "用途カテゴリ": "食費",
+                            "税務カテゴリ": "課税",
+                            "内容": "朝食",
+                            "金額": 0.0,
+                        }
+                    ]
+                ),
+                {"食費": 1},
+                {"課税": 3},
+            )
+
+    def test_build_bulk_expense_update_plan_rejects_invalid_exchange_rate(self):
+        with self.assertRaises(ValueError):
+            build_bulk_expense_update_plan(
+                pd.DataFrame(
+                    [
+                        {
+                            "id": 10,
+                            "payment_date": "2026/04/01",
+                            "amount": 50.0,
+                            "exchange_rate": None,
+                            "payment_method": "現金",
+                            "description": "朝食",
+                            "usage_categories_id": 1,
+                            "tax_categories_id": 3,
+                        }
+                    ]
+                ),
+                pd.DataFrame(
+                    [
+                        {
+                            "ID": 10,
+                            "支払日": date(2026, 4, 1),
+                            "決済方法": "現金",
+                            "用途カテゴリ": "食費",
+                            "税務カテゴリ": "課税",
+                            "内容": "朝食",
+                            "金額": 100.0,
+                        }
+                    ]
+                ),
+                {"食費": 1},
+                {"課税": 3},
             )
 
     def test_update_expense_record_filters_by_id_and_user_id(self):

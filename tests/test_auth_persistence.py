@@ -120,6 +120,44 @@ class AuthPersistenceTest(unittest.TestCase):
         self.assertIn(f"{auth.AUTH_COOKIE_NAME}=", rendered["source"])
         self.assertIn("Max-Age=0", rendered["source"])
 
+    def test_sign_up_includes_signup_metadata_and_bootstraps_when_session_exists(self):
+        captured_payload = {}
+        fake_session = SimpleNamespace(access_token="access-1", refresh_token="refresh-1")
+        fake_user = SimpleNamespace(id="user-1", email="user@example.com", user_metadata={})
+
+        def fake_sign_up(payload):
+            captured_payload["payload"] = payload
+            return SimpleNamespace(session=fake_session, user=fake_user)
+
+        fake_client = SimpleNamespace(
+            auth=SimpleNamespace(sign_up=fake_sign_up)
+        )
+        fake_st = _FakeStreamlit()
+
+        with (
+            patch.object(auth, "st", fake_st),
+            patch.object(auth, "create_public_supabase_client", return_value=fake_client),
+            patch.object(auth, "bootstrap_user_account_from_auth_user") as bootstrap_mock,
+        ):
+            auth.sign_up(
+                "user@example.com",
+                "password123",
+                signup_metadata={"display_name": "hide"},
+            )
+
+        self.assertEqual(captured_payload["payload"]["options"]["data"], {"display_name": "hide"})
+        bootstrap_mock.assert_called_once()
+        self.assertEqual(fake_st.session_state["sb_access_token"], "access-1")
+
+    def test_sign_up_raises_when_auth_user_is_not_created(self):
+        fake_client = SimpleNamespace(
+            auth=SimpleNamespace(sign_up=lambda payload: SimpleNamespace(session=None, user=None))
+        )
+
+        with patch.object(auth, "create_public_supabase_client", return_value=fake_client):
+            with self.assertRaisesRegex(ValueError, "アカウントを作成できませんでした"):
+                auth.sign_up("user@example.com", "password123")
+
     def test_require_authenticated_user_warns_and_stops_when_logged_out(self):
         fake_st = _FakeStreamlit()
 
